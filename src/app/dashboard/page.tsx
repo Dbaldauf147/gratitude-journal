@@ -62,11 +62,13 @@ export default function DashboardPage() {
   const [editSaving, setEditSaving] = useState(false);
 
   const loadEntries = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("gratitude_entries")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(30);
+
+    console.log("Load entries:", { data, error });
 
     if (data) {
       setEntries(data);
@@ -94,12 +96,14 @@ export default function DashboardPage() {
     if (!grateful1.trim() || !grateful2.trim() || !grateful3.trim()) return;
 
     setSaving(true);
-    const { error } = await supabase.from("gratitude_entries").insert({
+    const { error, data } = await supabase.from("gratitude_entries").insert({
       user_id: user?.id,
       grateful_1: grateful1.trim(),
       grateful_2: grateful2.trim(),
       grateful_3: grateful3.trim(),
-    });
+    }).select();
+
+    console.log("Insert result:", { error, data });
 
     if (!error) {
       setGrateful1("");
@@ -108,6 +112,8 @@ export default function DashboardPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       await loadEntries();
+    } else {
+      alert("Error saving: " + error.message);
     }
     setSaving(false);
   }
