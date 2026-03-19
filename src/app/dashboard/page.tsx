@@ -54,7 +54,12 @@ export default function DashboardPage() {
   const [grateful3, setGrateful3] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [todayDone, setTodayDone] = useState(false);
+  const [todayEntry, setTodayEntry] = useState<GratitudeEntry | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [edit1, setEdit1] = useState("");
+  const [edit2, setEdit2] = useState("");
+  const [edit3, setEdit3] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   const loadEntries = useCallback(async () => {
     const { data } = await supabase
@@ -65,8 +70,8 @@ export default function DashboardPage() {
 
     if (data) {
       setEntries(data);
-      const hasTodayEntry = data.some((e) => isToday(e.created_at));
-      setTodayDone(hasTodayEntry);
+      const todayE = data.find((e) => isToday(e.created_at));
+      setTodayEntry(todayE || null);
     }
   }, [supabase]);
 
@@ -76,10 +81,13 @@ export default function DashboardPage() {
         router.push("/login");
       } else {
         setUser(user);
-        loadEntries();
       }
     });
-  }, [supabase, router, loadEntries]);
+  }, [supabase, router]);
+
+  useEffect(() => {
+    if (user) loadEntries();
+  }, [user, loadEntries]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -98,11 +106,45 @@ export default function DashboardPage() {
       setGrateful2("");
       setGrateful3("");
       setSaved(true);
-      setTodayDone(true);
       setTimeout(() => setSaved(false), 3000);
-      loadEntries();
+      await loadEntries();
     }
     setSaving(false);
+  }
+
+  function startEditing(entry: GratitudeEntry) {
+    setEditingId(entry.id);
+    setEdit1(entry.grateful_1);
+    setEdit2(entry.grateful_2);
+    setEdit3(entry.grateful_3);
+  }
+
+  function cancelEditing() {
+    setEditingId(null);
+    setEdit1("");
+    setEdit2("");
+    setEdit3("");
+  }
+
+  async function saveEdit(entryId: string) {
+    if (!edit1.trim() || !edit2.trim() || !edit3.trim()) return;
+    setEditSaving(true);
+    const { error } = await supabase
+      .from("gratitude_entries")
+      .update({
+        grateful_1: edit1.trim(),
+        grateful_2: edit2.trim(),
+        grateful_3: edit3.trim(),
+      })
+      .eq("id", entryId);
+
+    if (!error) {
+      setEditingId(null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+      await loadEntries();
+    }
+    setEditSaving(false);
   }
 
   async function handleSignOut() {
@@ -130,7 +172,7 @@ export default function DashboardPage() {
         (e) => e.created_at.split("T")[0] === dateStr
       );
       if (hasEntry) count++;
-      else if (i > 0) break; // today can be empty without breaking
+      else if (i > 0) break;
     }
     return count;
   })();
@@ -164,7 +206,7 @@ export default function DashboardPage() {
 
       <div className="max-w-2xl mx-auto px-6 space-y-10">
         {/* Today's Entry Form */}
-        {!todayDone ? (
+        {!todayEntry ? (
           <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
             <h2 className="text-lg font-light text-[var(--text)] mb-1">
               Tonight&apos;s Reflection
@@ -212,14 +254,20 @@ export default function DashboardPage() {
             <h2 className="text-lg font-light text-[var(--text)] mb-1">
               Today&apos;s reflection is complete
             </h2>
-            <p className="text-xs text-[var(--text-muted)]">
+            <p className="text-xs text-[var(--text-muted)] mb-4">
               Come back tomorrow evening to continue your practice.
             </p>
+            <button
+              onClick={() => startEditing(todayEntry)}
+              className="text-xs text-[var(--accent)] hover:underline"
+            >
+              Edit today&apos;s entry
+            </button>
           </section>
         )}
 
         {saved && (
-          <div className="fixed bottom-6 right-6 bg-[var(--pastel-sage)] text-[var(--text)] text-sm px-5 py-2.5 rounded-full shadow-md animate-fade-in">
+          <div className="fixed bottom-6 right-6 bg-[var(--pastel-sage)] text-[var(--text)] text-sm px-5 py-2.5 rounded-full shadow-md">
             Saved
           </div>
         )}
@@ -235,24 +283,73 @@ export default function DashboardPage() {
                 key={entry.id}
                 className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]"
               >
-                <p className="text-xs text-[var(--text-muted)] mb-4">
-                  {formatDate(entry.created_at)}
-                </p>
-                <div className="space-y-3">
-                  {[entry.grateful_1, entry.grateful_2, entry.grateful_3].map(
-                    (text, i) => (
-                      <div key={i} className="flex items-start gap-3">
-                        <div
-                          className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                          style={{ backgroundColor: PASTEL_COLORS[i] }}
-                        />
-                        <p className="text-sm text-[var(--text)] leading-relaxed">
-                          {text}
-                        </p>
-                      </div>
-                    )
+                <div className="flex items-center justify-between mb-4">
+                  <p className="text-xs text-[var(--text-muted)]">
+                    {formatDate(entry.created_at)}
+                  </p>
+                  {editingId !== entry.id && (
+                    <button
+                      onClick={() => startEditing(entry)}
+                      className="text-xs text-[var(--accent)] hover:underline"
+                    >
+                      Edit
+                    </button>
                   )}
                 </div>
+
+                {editingId === entry.id ? (
+                  <div className="space-y-3">
+                    {[
+                      { value: edit1, setter: setEdit1, idx: 0 },
+                      { value: edit2, setter: setEdit2, idx: 1 },
+                      { value: edit3, setter: setEdit3, idx: 2 },
+                    ].map(({ value, setter, idx }) => (
+                      <div key={idx} className="flex items-start gap-3">
+                        <div
+                          className="w-2 h-2 rounded-full mt-3.5 shrink-0"
+                          style={{ backgroundColor: PASTEL_COLORS[idx] }}
+                        />
+                        <textarea
+                          value={value}
+                          onChange={(e) => setter(e.target.value)}
+                          rows={2}
+                          className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
+                        />
+                      </div>
+                    ))}
+                    <div className="flex gap-3 pt-2">
+                      <button
+                        onClick={() => saveEdit(entry.id)}
+                        disabled={editSaving}
+                        className="flex-1 py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                      >
+                        {editSaving ? "Saving..." : "Save Changes"}
+                      </button>
+                      <button
+                        onClick={cancelEditing}
+                        className="px-6 py-2.5 rounded-full border border-[var(--border)] text-sm text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {[entry.grateful_1, entry.grateful_2, entry.grateful_3].map(
+                      (text, i) => (
+                        <div key={i} className="flex items-start gap-3">
+                          <div
+                            className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                            style={{ backgroundColor: PASTEL_COLORS[i] }}
+                          />
+                          <p className="text-sm text-[var(--text)] leading-relaxed">
+                            {text}
+                          </p>
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </section>
