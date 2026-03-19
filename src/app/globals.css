@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #faf8f5;
+  --surface: #ffffff;
+  --text: #3d3d3d;
+  --text-muted: #9a9a9a;
+  --accent: #c4a882;
+  --accent-hover: #b89970;
+  --border: #ebe7e1;
+  --pastel-rose: #f5e6e0;
+  --pastel-lavender: #e8e0f0;
+  --pastel-sage: #e0ebe4;
+}
+
+body {
+  color: var(--text);
+  background: var(--bg);
+  font-family: 'Georgia', 'Times New Roman', serif;
+  -webkit-font-smoothing: antialiased;
+}
