@@ -12,6 +12,14 @@ interface GratitudeEntry {
   created_at: string;
 }
 
+interface Affirmation {
+  id: string;
+  text: string;
+  approved: boolean;
+  dismissed: boolean;
+  shown_at: string;
+}
+
 const PASTEL_COLORS = [
   "var(--pastel-rose)",
   "var(--pastel-lavender)",
@@ -22,6 +30,29 @@ const PLACEHOLDERS = [
   "Something that made you smile today...",
   "A person you appreciate...",
   "A simple pleasure you enjoyed...",
+];
+
+const DEFAULT_AFFIRMATIONS = [
+  "I am worthy of love, happiness, and fulfillment.",
+  "I choose to focus on what I can control and let go of the rest.",
+  "I am growing stronger and more resilient every day.",
+  "I am grateful for the abundance that flows into my life.",
+  "I trust the timing of my journey.",
+  "I am enough, just as I am.",
+  "I attract positivity and release negativity.",
+  "My challenges are opportunities for growth.",
+  "I am surrounded by love and support.",
+  "I choose peace over worry.",
+  "I am capable of achieving anything I set my mind to.",
+  "I honor my body and treat it with kindness.",
+  "Every day is a fresh start full of possibilities.",
+  "I radiate confidence, warmth, and compassion.",
+  "I am deserving of rest and self-care.",
+  "I celebrate my progress, no matter how small.",
+  "I release comparison and embrace my unique path.",
+  "I am a positive force in the lives of those around me.",
+  "My potential is limitless.",
+  "I welcome joy into every moment of today.",
 ];
 
 function formatDate(dateStr: string) {
@@ -61,19 +92,58 @@ export default function DashboardPage() {
   const [edit3, setEdit3] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
+  // Affirmation state
+  const [todayAffirmation, setTodayAffirmation] = useState<string>("");
+  const [affirmationStatus, setAffirmationStatus] = useState<"pending" | "approved" | "dismissed">("pending");
+  const [approvedAffirmations, setApprovedAffirmations] = useState<Affirmation[]>([]);
+
   const loadEntries = useCallback(async () => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("gratitude_entries")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(30);
 
-    console.log("Load entries:", { data, error });
-
     if (data) {
       setEntries(data);
       const todayE = data.find((e) => isToday(e.created_at));
       setTodayEntry(todayE || null);
+    }
+  }, [supabase]);
+
+  const loadAffirmations = useCallback(async () => {
+    // Load all user's affirmations
+    const { data } = await supabase
+      .from("affirmations")
+      .select("*")
+      .order("shown_at", { ascending: false });
+
+    const all = data || [];
+    setApprovedAffirmations(all.filter((a) => a.approved && !a.dismissed));
+
+    // Check if there's already one for today
+    const todayAff = all.find((a) => isToday(a.shown_at));
+
+    if (todayAff) {
+      setTodayAffirmation(todayAff.text);
+      setAffirmationStatus(todayAff.approved ? "approved" : todayAff.dismissed ? "dismissed" : "pending");
+    } else {
+      // Pick a new affirmation: prefer approved ones in rotation, otherwise use defaults
+      const approved = all.filter((a) => a.approved && !a.dismissed);
+      const dismissed = new Set(all.filter((a) => a.dismissed).map((a) => a.text));
+      const available = approved.length > 0
+        ? approved.map((a) => a.text)
+        : DEFAULT_AFFIRMATIONS.filter((a) => !dismissed.has(a));
+
+      if (available.length > 0) {
+        // Pick based on day of year for consistency
+        const dayOfYear = Math.floor(
+          (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000
+        );
+        const pick = available[dayOfYear % available.length];
+        setTodayAffirmation(pick);
+        setAffirmationStatus("pending");
+      }
     }
   }, [supabase]);
 
@@ -88,22 +158,23 @@ export default function DashboardPage() {
   }, [supabase, router]);
 
   useEffect(() => {
-    if (user) loadEntries();
-  }, [user, loadEntries]);
+    if (user) {
+      loadEntries();
+      loadAffirmations();
+    }
+  }, [user, loadEntries, loadAffirmations]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!grateful1.trim() || !grateful2.trim() || !grateful3.trim()) return;
 
     setSaving(true);
-    const { error, data } = await supabase.from("gratitude_entries").insert({
+    const { error } = await supabase.from("gratitude_entries").insert({
       user_id: user?.id,
       grateful_1: grateful1.trim(),
       grateful_2: grateful2.trim(),
       grateful_3: grateful3.trim(),
     }).select();
-
-    console.log("Insert result:", { error, data });
 
     if (!error) {
       setGrateful1("");
@@ -127,9 +198,6 @@ export default function DashboardPage() {
 
   function cancelEditing() {
     setEditingId(null);
-    setEdit1("");
-    setEdit2("");
-    setEdit3("");
   }
 
   async function saveEdit(entryId: string) {
@@ -151,6 +219,36 @@ export default function DashboardPage() {
       await loadEntries();
     }
     setEditSaving(false);
+  }
+
+  async function handleAffirmation(approve: boolean) {
+    if (!user || !todayAffirmation) return;
+
+    // Check if this affirmation already exists for today
+    const { data: existing } = await supabase
+      .from("affirmations")
+      .select("id")
+      .eq("text", todayAffirmation)
+      .gte("shown_at", new Date().toISOString().split("T")[0]);
+
+    if (existing && existing.length > 0) {
+      await supabase
+        .from("affirmations")
+        .update({ approved: approve, dismissed: !approve })
+        .eq("id", existing[0].id);
+    } else {
+      await supabase.from("affirmations").insert({
+        user_id: user.id,
+        text: todayAffirmation,
+        approved: approve,
+        dismissed: !approve,
+      });
+    }
+
+    setAffirmationStatus(approve ? "approved" : "dismissed");
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+    await loadAffirmations();
   }
 
   async function handleSignOut() {
@@ -211,6 +309,41 @@ export default function DashboardPage() {
       </header>
 
       <div className="max-w-2xl mx-auto px-6 space-y-10">
+
+        {/* Daily Affirmation */}
+        {todayAffirmation && (
+          <section className="bg-[var(--pastel-lavender)] rounded-2xl p-8 text-center">
+            <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-4">
+              Today&apos;s Affirmation
+            </p>
+            <p className="text-lg font-light text-[var(--text)] leading-relaxed italic mb-6">
+              &ldquo;{todayAffirmation}&rdquo;
+            </p>
+            {affirmationStatus === "pending" ? (
+              <div className="flex gap-3 justify-center">
+                <button
+                  onClick={() => handleAffirmation(true)}
+                  className="px-6 py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors"
+                >
+                  Keep in Rotation
+                </button>
+                <button
+                  onClick={() => handleAffirmation(false)}
+                  className="px-6 py-2.5 rounded-full border border-[var(--border)] bg-white text-sm text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--text-muted)]">
+                {affirmationStatus === "approved"
+                  ? "Added to your rotation"
+                  : "Removed from circulation"}
+              </p>
+            )}
+          </section>
+        )}
+
         {/* Today's Entry Form */}
         {!todayEntry ? (
           <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
@@ -276,6 +409,40 @@ export default function DashboardPage() {
           <div className="fixed bottom-6 right-6 bg-[var(--pastel-sage)] text-[var(--text)] text-sm px-5 py-2.5 rounded-full shadow-md">
             Saved
           </div>
+        )}
+
+        {/* Approved Affirmations */}
+        {approvedAffirmations.length > 0 && (
+          <section className="space-y-3">
+            <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
+              Your Affirmations
+            </h3>
+            <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+              <div className="space-y-3">
+                {approvedAffirmations.map((a) => (
+                  <div key={a.id} className="flex items-start gap-3 group">
+                    <div className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-[var(--pastel-lavender)]" />
+                    <p className="flex-1 text-sm text-[var(--text)] leading-relaxed italic">
+                      {a.text}
+                    </p>
+                    <button
+                      onClick={async () => {
+                        await supabase
+                          .from("affirmations")
+                          .update({ dismissed: true, approved: false })
+                          .eq("id", a.id);
+                        await loadAffirmations();
+                      }}
+                      className="text-xs text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
+                      title="Remove from rotation"
+                    >
+                      remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
         )}
 
         {/* Past Entries */}
