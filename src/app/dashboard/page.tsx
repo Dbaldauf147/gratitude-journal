@@ -91,6 +91,12 @@ export default function DashboardPage() {
   const [edit2, setEdit2] = useState("");
   const [edit3, setEdit3] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+  const [pastDate, setPastDate] = useState("");
+  const [past1, setPast1] = useState("");
+  const [past2, setPast2] = useState("");
+  const [past3, setPast3] = useState("");
+  const [pastSaving, setPastSaving] = useState(false);
+  const [showPastEntry, setShowPastEntry] = useState(false);
 
   // Affirmation state
   const [todayAffirmation, setTodayAffirmation] = useState<string>("");
@@ -102,7 +108,7 @@ export default function DashboardPage() {
       .from("gratitude_entries")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(30);
+      .limit(100);
 
     if (data) {
       setEntries(data);
@@ -188,6 +194,44 @@ export default function DashboardPage() {
     }
     setSaving(false);
   }
+
+  async function handlePastSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!past1.trim() || !past2.trim() || !past3.trim() || !pastDate) return;
+
+    // Check if entry already exists for this date
+    const existing = entries.find((en) => en.created_at.split("T")[0] === pastDate);
+    if (existing) {
+      alert("An entry already exists for this date. Edit it below instead.");
+      return;
+    }
+
+    setPastSaving(true);
+    const { error } = await supabase.from("gratitude_entries").insert({
+      user_id: user?.id,
+      grateful_1: past1.trim(),
+      grateful_2: past2.trim(),
+      grateful_3: past3.trim(),
+      created_at: `${pastDate}T21:00:00.000Z`,
+    }).select();
+
+    if (!error) {
+      setPast1("");
+      setPast2("");
+      setPast3("");
+      setPastDate("");
+      setShowPastEntry(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+      await loadEntries();
+    } else {
+      alert("Error saving: " + error.message);
+    }
+    setPastSaving(false);
+  }
+
+  // Dates that already have entries
+  const entryDates = new Set(entries.map((e) => e.created_at.split("T")[0]));
 
   function startEditing(entry: GratitudeEntry) {
     setEditingId(entry.id);
@@ -402,6 +446,73 @@ export default function DashboardPage() {
             >
               Edit today&apos;s entry
             </button>
+          </section>
+        )}
+
+        {/* Past Entry */}
+        <div className="text-center">
+          <button
+            onClick={() => setShowPastEntry((p) => !p)}
+            className="text-xs text-[var(--accent)] hover:underline"
+          >
+            {showPastEntry ? "Hide" : "Add a past entry"}
+          </button>
+        </div>
+
+        {showPastEntry && (
+          <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
+            <h2 className="text-lg font-light text-[var(--text)] mb-1">
+              Past Reflection
+            </h2>
+            <p className="text-xs text-[var(--text-muted)] mb-4">
+              Fill in a journal entry for a previous day.
+            </p>
+            <form onSubmit={handlePastSubmit} className="space-y-4">
+              <div>
+                <span className="text-xs text-[var(--text-muted)] block mb-1">Date</span>
+                <input
+                  type="date"
+                  value={pastDate}
+                  onChange={(e) => setPastDate(e.target.value)}
+                  max={new Date(Date.now() - 86400000).toISOString().split("T")[0]}
+                  min={new Date(Date.now() - 100 * 86400000).toISOString().split("T")[0]}
+                  required
+                  className="px-4 py-2.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors w-full"
+                />
+                {pastDate && entryDates.has(pastDate) && (
+                  <p className="text-xs text-red-400 mt-1">An entry already exists for this date.</p>
+                )}
+              </div>
+
+              {[
+                { value: past1, setter: setPast1, idx: 0 },
+                { value: past2, setter: setPast2, idx: 1 },
+                { value: past3, setter: setPast3, idx: 2 },
+              ].map(({ value, setter, idx }) => (
+                <div key={idx} className="flex items-start gap-3">
+                  <div
+                    className="w-2 h-2 rounded-full mt-3.5 shrink-0"
+                    style={{ backgroundColor: PASTEL_COLORS[idx] }}
+                  />
+                  <textarea
+                    value={value}
+                    onChange={(e) => setter(e.target.value)}
+                    placeholder={PLACEHOLDERS[idx]}
+                    required
+                    rows={2}
+                    className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
+                  />
+                </div>
+              ))}
+
+              <button
+                type="submit"
+                disabled={pastSaving || !pastDate || entryDates.has(pastDate)}
+                className="w-full py-3 rounded-full bg-[var(--accent)] text-white text-sm font-medium tracking-wide hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+              >
+                {pastSaving ? "Saving..." : "Save Past Entry"}
+              </button>
+            </form>
           </section>
         )}
 
