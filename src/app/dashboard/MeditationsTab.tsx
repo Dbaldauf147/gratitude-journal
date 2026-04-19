@@ -93,9 +93,39 @@ const MEDITATIONS: Meditation[] = [
   },
 ];
 
+const HIDDEN_KEY = "hiddenMeditations";
+
 export default function MeditationsTab() {
   const [playing, setPlaying] = useState<string | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [showHidden, setShowHidden] = useState(false);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HIDDEN_KEY);
+      if (raw) setHidden(new Set(JSON.parse(raw)));
+    } catch {}
+  }, []);
+
+  function persist(next: Set<string>) {
+    setHidden(next);
+    try {
+      localStorage.setItem(HIDDEN_KEY, JSON.stringify(Array.from(next)));
+    } catch {}
+  }
+
+  function hide(id: string) {
+    const next = new Set(hidden);
+    next.add(id);
+    persist(next);
+  }
+
+  function unhide(id: string) {
+    const next = new Set(hidden);
+    next.delete(id);
+    persist(next);
+  }
 
   useEffect(() => {
     Object.entries(audioRefs.current).forEach(([id, audio]) => {
@@ -103,6 +133,9 @@ export default function MeditationsTab() {
       if (id !== playing) audio.pause();
     });
   }, [playing]);
+
+  const visible = MEDITATIONS.filter((m) => !hidden.has(m.id));
+  const hiddenList = MEDITATIONS.filter((m) => hidden.has(m.id));
 
   return (
     <div className="space-y-6">
@@ -116,10 +149,10 @@ export default function MeditationsTab() {
       </div>
 
       <div className="space-y-4">
-        {MEDITATIONS.map((m) => (
+        {visible.map((m) => (
           <article
             key={m.id}
-            className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]"
+            className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)] group"
           >
             <div className="flex items-start gap-3 mb-3">
               <div
@@ -131,9 +164,18 @@ export default function MeditationsTab() {
                   <h3 className="text-base font-medium text-[var(--text)]">
                     {m.title}
                   </h3>
-                  <span className="text-[10px] tracking-widest uppercase text-[var(--text-muted)]">
-                    {m.type}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] tracking-widest uppercase text-[var(--text-muted)]">
+                      {m.type}
+                    </span>
+                    <button
+                      onClick={() => hide(m.id)}
+                      className="text-xs text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all"
+                      title="Hide this meditation"
+                    >
+                      hide
+                    </button>
+                  </div>
                 </div>
                 <p className="text-sm text-[var(--text-muted)] leading-relaxed mt-1.5">
                   {m.description}
@@ -160,6 +202,46 @@ export default function MeditationsTab() {
           </article>
         ))}
       </div>
+
+      {visible.length === 0 && (
+        <p className="text-center text-sm text-[var(--text-muted)] py-8">
+          All meditations are hidden. Use the panel below to bring some back.
+        </p>
+      )}
+
+      {hiddenList.length > 0 && (
+        <div className="pt-4">
+          <button
+            onClick={() => setShowHidden((s) => !s)}
+            className="text-xs text-[var(--accent)] hover:underline block mx-auto"
+          >
+            {showHidden ? "Hide" : "Show"} hidden ({hiddenList.length})
+          </button>
+          {showHidden && (
+            <div className="mt-4 bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)] space-y-3">
+              {hiddenList.map((m) => (
+                <div key={m.id} className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: m.accent }}
+                    />
+                    <p className="text-sm text-[var(--text)] truncate">
+                      {m.title}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => unhide(m.id)}
+                    className="text-xs text-[var(--accent)] hover:underline shrink-0"
+                  >
+                    unhide
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
