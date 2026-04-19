@@ -11,7 +11,10 @@ from pathlib import Path
 
 import edge_tts
 
-VOICE = "en-US-JennyNeural"
+VOICES = {
+    "female": "en-US-AvaMultilingualNeural",
+    "male": "en-US-AndrewMultilingualNeural",
+}
 RATE = "-20%"
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "public" / "meditations"
@@ -320,9 +323,424 @@ MEDITATIONS = {
 }
 
 
-async def generate_speech(text: str, out_path: Path) -> None:
-    communicate = edge_tts.Communicate(text, VOICE, rate=RATE)
-    await communicate.save(str(out_path))
+# Extended ~10-minute versions. Same structure: str = spoken, int = seconds of silence.
+MEDITATIONS_10 = {
+    "mindfulness": [
+        "Welcome to this ten minute mindfulness meditation. Find a comfortable seated position. Allow your hands to rest gently in your lap. Softly close your eyes.",
+        12,
+        "Take a slow, deep breath in through your nose. And gently exhale through your mouth.",
+        14,
+        "Take one more deep breath in. And a long, complete exhale.",
+        18,
+        "Allow the breath to settle into its natural rhythm. There is nothing to do. Nothing to fix. Nothing to change.",
+        22,
+        "Bring your attention to the present moment. To this breath. To this body. To this room.",
+        25,
+        "As thoughts arise, simply observe them. Like clouds passing across an open sky. There is no need to push them away. No need to follow them.",
+        28,
+        "If you find yourself caught in a thought, gently acknowledge it, and return to the breath.",
+        25,
+        "Notice the sensation of the air entering your nostrils. Cool on the inhale. Warmer on the exhale.",
+        28,
+        "Notice the natural pause between the in-breath and the out-breath. A small space of stillness.",
+        28,
+        "Now widen your awareness to the sounds around you. Without labeling them as good or bad. Simply let them rise and fall.",
+        28,
+        "Notice the closest sounds. Then the more distant sounds. Then the sounds beneath the sounds.",
+        30,
+        "Bring awareness to your body. Begin with the contact points. The feet on the floor. The seat beneath you. The hands resting in your lap.",
+        25,
+        "Notice any sensation. Tingling. Warmth. Tension. Heaviness. Softness. Acknowledge whatever is present.",
+        30,
+        "If you notice tension, breathe into that area. With each exhale, allow it to soften.",
+        30,
+        "Now widen your awareness to include thoughts, emotions, sensations, and sounds — all together. The full landscape of this present moment.",
+        35,
+        "Whatever arises is welcome. Whatever passes is welcome. You are simply here, observing.",
+        35,
+        "Return now to the breath. This anchor is always here for you. Steady. Constant. Calm.",
+        30,
+        "Take a moment to appreciate this practice. The gift of pausing. The gift of noticing.",
+        18,
+        "When you feel ready, begin to deepen your breath. Wiggle your fingers and toes. And gently open your eyes, carrying this mindful awareness with you.",
+        5,
+    ],
+
+    "focused": [
+        "Welcome to this ten minute focused meditation. Settle into a comfortable position. Spine tall. Eyes softly closed.",
+        12,
+        "Today we will train the mind to rest on a single anchor: the breath.",
+        12,
+        "Begin by taking three slow, intentional breaths. In through the nose. Out through the mouth.",
+        20,
+        "Allow the breath to return to its natural pace. Place your full attention on the sensation of breathing at the tip of your nose.",
+        25,
+        "Feel the cool air as it enters. Feel the warm air as it leaves.",
+        28,
+        "If your mind drifts, that is completely natural. Simply notice the wandering, and gently return your focus to the breath.",
+        28,
+        "Each return is the practice. Each return strengthens your focus, like a muscle.",
+        25,
+        "Now we will add counting. Silently count one on the exhale. Two on the next exhale. Continue up to ten. Then begin again at one.",
+        30,
+        "Continue counting at your own pace. If you lose count, simply start over, without frustration.",
+        40,
+        "Notice the moment you become aware that the mind has wandered. That moment of noticing is mindfulness itself.",
+        30,
+        "Return to the count. Return to the breath. Patient. Steady.",
+        40,
+        "Now let go of the counting. Let the breath be your only focus. Each inhale. Each exhale.",
+        45,
+        "Feel how the mind begins to settle. The thinking softens. The space between thoughts grows wider.",
+        40,
+        "Rest in this clear, focused awareness. Steady on the breath. Open. Calm.",
+        45,
+        "When you are ready, take one final, deeper breath. Open your eyes, and carry this clear, focused mind into your day.",
+        5,
+    ],
+
+    "loving-kindness": [
+        "Welcome to this ten minute loving-kindness meditation. Find a comfortable position. Place a hand over your heart, if you wish. Close your eyes.",
+        12,
+        "Take a few deep breaths, allowing your body to soften, and your heart to open.",
+        18,
+        "We begin by directing kindness toward ourselves.",
+        10,
+        "Silently repeat: May I be happy.",
+        10,
+        "May I be healthy.",
+        10,
+        "May I be safe.",
+        10,
+        "May I live with ease.",
+        18,
+        "Allow these wishes to settle into your body, like warm sunlight on your skin.",
+        25,
+        "If self-kindness is difficult, that is okay. Simply hold the intention. The practice is in the offering.",
+        22,
+        "Now bring to mind someone you love. A friend. A family member. A beloved pet. See them clearly.",
+        15,
+        "Silently send them these wishes. May you be happy. May you be healthy. May you be safe. May you live with ease.",
+        25,
+        "Feel the warmth of these wishes. Notice how it feels in your own heart, to wish another well.",
+        25,
+        "Now bring to mind someone neutral. A neighbor. A coworker. Someone you see, but do not know well.",
+        15,
+        "Offer them the same kindness. May you be happy. May you be healthy. May you be safe. May you live with ease.",
+        25,
+        "Notice how kindness can extend, even to those we barely know.",
+        20,
+        "Now, if you feel ready, bring to mind someone with whom you have difficulty. Just a small difficulty, to begin.",
+        15,
+        "Gently send the same wishes. May you be happy. May you be healthy. May you be safe. May you live with ease.",
+        28,
+        "There is no need to forgive. No need to forget. Simply wish them well in this moment.",
+        25,
+        "Finally, expand your circle of kindness to include all beings everywhere. May all beings be happy. May all beings be free from suffering.",
+        25,
+        "May all beings live in peace.",
+        25,
+        "Take a deep breath. Feel the warmth in your heart. Carry this loving-kindness with you. And when you are ready, gently open your eyes.",
+        5,
+    ],
+
+    "mantra": [
+        "Welcome to this ten minute mantra meditation. Sit comfortably, with your spine tall and your shoulders relaxed. Close your eyes.",
+        12,
+        "Take three deep, cleansing breaths.",
+        18,
+        "In mantra meditation, we use the repetition of a word or phrase to calm the mind. Today we will use the word peace.",
+        14,
+        "On your next inhale, silently say the word peace. On your exhale, silently say the word peace.",
+        25,
+        "Continue this rhythm. Peace on the inhale. Peace on the exhale.",
+        35,
+        "Let the word ride on the breath. Let it become as natural as breathing itself.",
+        40,
+        "If your mind wanders, simply return to the word. Peace.",
+        40,
+        "Notice how the mind begins to quiet. How thoughts soften. How the spaces between thoughts grow wider.",
+        40,
+        "If the word feels heavy, let it become light. If it feels rushed, let it slow.",
+        40,
+        "Continue silently with the mantra. Peace. Peace. Peace.",
+        50,
+        "Allow the mantra to deepen. Each repetition a little softer. A little more spacious.",
+        50,
+        "Now slowly let the mantra fade. Rest in the silence that remains.",
+        35,
+        "This silence is not empty. It is full. Full of awareness. Full of peace.",
+        30,
+        "Take a deep breath. Bring movement back into your fingers and toes. And gently open your eyes.",
+        5,
+    ],
+
+    "transcendental": [
+        "Welcome to this ten minute transcendental-style meditation. Note that authentic Transcendental Meditation requires a personalized mantra from a certified teacher. This is a gentle introduction, using a traditional sound.",
+        10,
+        "Sit comfortably with your back supported, hands resting in your lap, and eyes softly closed.",
+        14,
+        "Take a few natural breaths. Do not try to control them.",
+        18,
+        "We will use the sound, ah-hum. A neutral sound that carries no meaning.",
+        12,
+        "Silently, in your mind, begin to repeat. Ah-hum. Ah-hum.",
+        25,
+        "Do not force the sound. Let it arise effortlessly, like a thought that drifts in on its own.",
+        30,
+        "If thoughts come, this is natural. Simply, easily, return to the sound.",
+        35,
+        "There is no effort here. No concentration. Just a gentle, easy repetition.",
+        40,
+        "If the sound changes, becomes faint, or fades into silence, allow it. This is the mind settling.",
+        45,
+        "If a thought pulls you away, that is also fine. Without judgment, return to the sound.",
+        45,
+        "Continue resting with the sound, or with the silence, whichever appears.",
+        50,
+        "There is nowhere to go. Nothing to achieve. Only this gentle presence.",
+        50,
+        "Slowly, begin to let the practice come to a close. Sit quietly for a moment, without the sound.",
+        25,
+        "When you are ready, gently open your eyes, taking your time to return.",
+        5,
+    ],
+
+    "body-scan": [
+        "Welcome to this ten minute body scan meditation. Lie down or sit comfortably, and softly close your eyes.",
+        12,
+        "Take a slow, deep breath in. And a long, complete exhale.",
+        15,
+        "Take another deep breath. Allow the body to begin to settle.",
+        18,
+        "We will move our attention slowly through the body, releasing tension as we go.",
+        10,
+        "Begin at the crown of your head. Notice any sensation here. Soften the scalp.",
+        18,
+        "Move down to your forehead. Release the space between the eyebrows. Let the eyes feel heavy in their sockets.",
+        18,
+        "Soften the cheeks. Relax the jaw. Let the tongue rest gently behind the teeth.",
+        18,
+        "Move into the throat. The neck. Let the neck lengthen. Let the shoulders drop, away from the ears.",
+        20,
+        "Bring awareness to your arms. Down through the upper arms. The elbows. The forearms. The wrists.",
+        20,
+        "Into the hands. Each finger. The palms. Let the hands feel heavy.",
+        20,
+        "Notice your chest. Feel it rise and fall with each breath. Allow the chest to soften.",
+        20,
+        "Bring attention to your upper back. The space between the shoulder blades. Let it widen.",
+        20,
+        "Move to your belly. Let it be soft. Let it expand fully with each inhale.",
+        20,
+        "Move into the lower back. Release any holding here. Let the spine relax into its natural curve.",
+        20,
+        "Bring awareness to the hips. The pelvis. Let everything settle and soften.",
+        20,
+        "Move down through the thighs. Heavy. Warm. Resting.",
+        18,
+        "The knees. Letting go of any holding.",
+        15,
+        "The calves. Soft. Quiet.",
+        15,
+        "The ankles. The feet. Each toe.",
+        20,
+        "Now sense the body as a whole. Feel its weight. Its warmth. Its aliveness.",
+        25,
+        "Rest in the awareness of the whole body, breathing as one.",
+        25,
+        "When you are ready, take a deeper breath. Wiggle your fingers and toes. Slowly open your eyes.",
+        5,
+    ],
+
+    "movement": [
+        "Welcome to this ten minute movement meditation. This practice is designed to be done while walking slowly. Indoors or outdoors. If you prefer, you may also do it seated, gently swaying with the breath.",
+        12,
+        "Begin by standing tall, with your feet shoulder width apart. Take a deep breath in. And exhale.",
+        14,
+        "Bring your attention to the soles of your feet. Notice the points of contact with the ground.",
+        18,
+        "Feel the weight of your body. Distributed evenly. Stable. Grounded.",
+        20,
+        "Begin to walk slowly. Much slower than your usual pace.",
+        12,
+        "As you lift one foot, notice the sensation of weight shifting. As you place the foot down, notice the contact with the earth.",
+        25,
+        "Feel each phase of the step. Lifting. Moving. Placing.",
+        25,
+        "Coordinate with your breath. Inhale as you step. Exhale as you step.",
+        30,
+        "Feel the muscles working in your legs. The gentle swing of your arms. The subtle adjustments in your balance.",
+        30,
+        "Notice the movement of your hips. Your spine. Your shoulders.",
+        25,
+        "If you walk outdoors, notice the air on your skin. The sounds around you. The colors of your surroundings.",
+        30,
+        "Notice any thoughts as they arise. Then return to the body in motion.",
+        30,
+        "If your mind wanders, return to the sensation of your feet on the ground.",
+        30,
+        "Each step is an arrival. Each step is complete in itself.",
+        30,
+        "Notice the rhythm. The steady, gentle pulse of walking.",
+        30,
+        "Slowly come to a stop. Stand quietly for a moment, feeling the stillness after motion.",
+        25,
+        "Take a final deep breath. Carry this present-moment awareness into your next activity.",
+        5,
+    ],
+
+    "guided": [
+        "Welcome to this ten minute guided visualization. Find a quiet, comfortable place to sit or lie down. Gently close your eyes.",
+        12,
+        "Take three deep, relaxing breaths. Allow your body to soften.",
+        18,
+        "Imagine yourself walking along a quiet path. The air is warm. The light is soft and golden.",
+        15,
+        "You can hear birds singing in the distance. A gentle breeze touches your skin.",
+        18,
+        "The path is soft beneath your feet. Each step relaxes you more deeply.",
+        20,
+        "The path leads you into a peaceful clearing. In the center of the clearing is a small, still pond.",
+        18,
+        "You walk to the edge of the pond and sit down on the soft grass. The water is perfectly clear, perfectly calm.",
+        22,
+        "Look at your reflection in the water. See yourself, exactly as you are, with kindness.",
+        25,
+        "Imagine that any worries you carry today are small leaves resting on the surface of the water. One by one, watch them gently drift away.",
+        30,
+        "As each leaf disappears, you feel lighter. More peaceful. More at ease.",
+        25,
+        "The water is now still and clear. Your mind is still and clear.",
+        25,
+        "Now imagine a warm, golden light, rising from the water. It surrounds you. It fills you.",
+        25,
+        "This light carries qualities of peace. Of safety. Of belonging.",
+        25,
+        "Breathe the light in. With each breath, it spreads through your whole body.",
+        30,
+        "Feel yourself completely held. Completely at home in this place.",
+        30,
+        "Sit here, in this quiet place, for as long as you wish. Knowing you can return whenever you need.",
+        35,
+        "Slowly, begin to make your way back along the path. Bring the calm of the clearing with you.",
+        18,
+        "The path returns you, gently, to the present moment.",
+        15,
+        "Take a deep breath. Feel your body. Open your eyes when you are ready.",
+        5,
+    ],
+
+    "vipassana": [
+        "Welcome to this ten minute vipassana, or insight, meditation. This practice helps us see things as they really are.",
+        10,
+        "Sit in a stable, comfortable position. Spine tall. Eyes softly closed.",
+        14,
+        "Begin with three deep breaths.",
+        18,
+        "Now allow the breath to return to its natural rhythm.",
+        14,
+        "Bring your attention to the rising and falling of your abdomen. As you inhale, the belly rises. As you exhale, the belly falls.",
+        25,
+        "Silently note: rising. Falling.",
+        25,
+        "Continue this gentle noting. Rising. Falling. Rising. Falling.",
+        30,
+        "When a sound arises, gently note: hearing. Then return to the breath.",
+        25,
+        "When a thought appears, simply note: thinking. Then return.",
+        25,
+        "When an emotion is present, note it: joy, restlessness, calm, sadness. Whatever it is, note it kindly.",
+        30,
+        "When a sensation arises in the body, note it: tingling, warmth, pressure, itching. Observe without reacting.",
+        35,
+        "Notice that whatever arises also passes. Sounds come and go. Thoughts come and go. Sensations come and go.",
+        35,
+        "This is the nature of all things. They arise. They pass.",
+        35,
+        "Nothing in our experience stays the same. Each moment is fresh. Each moment is new.",
+        35,
+        "Rest in this clear awareness. Watching. Knowing. Not clinging.",
+        45,
+        "Notice the spaciousness of awareness itself. Always here. Always still. Holding everything that arises.",
+        40,
+        "Take a deeper breath. Become aware of the body as a whole. Slowly, gently, open your eyes.",
+        5,
+    ],
+
+    "chakra": [
+        "Welcome to this ten minute chakra meditation. We will move attention through the seven energy centers of the body, balancing each in turn.",
+        10,
+        "Sit with your spine straight. Hands resting on your thighs. Eyes closed.",
+        14,
+        "Take three slow, deep breaths.",
+        18,
+        "Bring your attention to the base of your spine. The root chakra.",
+        12,
+        "Visualize a deep red light here. Steady. Grounding. Feel rooted to the earth, like the trunk of an ancient tree.",
+        30,
+        "Silently affirm: I am safe. I am stable. I am here.",
+        25,
+        "Move your awareness to just below the navel. The sacral chakra.",
+        12,
+        "Visualize a warm orange light. Creative. Flowing. Open.",
+        30,
+        "Silently affirm: I am creative. I am open. I welcome joy.",
+        25,
+        "Bring attention to the upper abdomen. The solar plexus chakra.",
+        12,
+        "See a bright yellow light, like the morning sun. Confidence. Strength. Personal power.",
+        30,
+        "Silently affirm: I am capable. I am strong. I trust myself.",
+        25,
+        "Move to the center of your chest. The heart chakra.",
+        12,
+        "Visualize a soft green light. Love. Compassion. Connection.",
+        30,
+        "Silently affirm: I am loved. I am loving. My heart is open.",
+        25,
+        "Bring attention to the throat. The throat chakra.",
+        12,
+        "See a clear blue light. Truth. Expression. Authenticity.",
+        30,
+        "Silently affirm: I speak my truth. My voice matters.",
+        25,
+        "Move to the space between your eyebrows. The third eye chakra.",
+        12,
+        "Visualize a deep indigo light. Intuition. Insight. Inner wisdom.",
+        30,
+        "Silently affirm: I trust my intuition. I see clearly.",
+        25,
+        "Bring attention to the crown of your head. The crown chakra.",
+        12,
+        "See a brilliant violet, or pure white, light. Connection to all that is.",
+        30,
+        "Silently affirm: I am connected. I am whole.",
+        25,
+        "Now visualize all seven lights, glowing together, in perfect balance, throughout your body.",
+        30,
+        "Feel the harmony. The alignment. The wholeness.",
+        25,
+        "Take a deep breath. Slowly open your eyes.",
+        5,
+    ],
+}
+
+
+async def generate_speech(text: str, voice: str, out_path: Path) -> None:
+    last_err: Exception | None = None
+    for attempt in range(5):
+        try:
+            communicate = edge_tts.Communicate(text, voice, rate=RATE)
+            await communicate.save(str(out_path))
+            await asyncio.sleep(0.4)
+            return
+        except Exception as e:
+            last_err = e
+            wait = 2 ** attempt
+            print(f"    retry {attempt + 1} after {wait}s ({type(e).__name__})")
+            await asyncio.sleep(wait)
+    raise RuntimeError(f"Failed after retries: {last_err}")
 
 
 def make_silence(seconds: float, out_path: Path) -> None:
@@ -355,27 +773,43 @@ def concat_mp3s(parts: list[Path], out_path: Path) -> None:
     list_file.unlink(missing_ok=True)
 
 
-async def build_meditation(med_id: str, med: dict) -> None:
-    print(f"Building {med_id}...")
-    out_file = OUT_DIR / f"{med_id}.mp3"
+async def build_one(med_id: str, segments: list, length: int, gender: str, voice: str, sem: asyncio.Semaphore) -> None:
+    out_file = OUT_DIR / f"{med_id}-{gender}-{length}.mp3"
+    if out_file.exists() and os.environ.get("SKIP_EXISTING") == "1":
+        print(f"Skipping {out_file.name} (exists)")
+        return
+    print(f"Starting {out_file.name}...")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        parts: list[Path] = []
-        for i, seg in enumerate(med["segments"]):
-            part = tmp_path / f"{med_id}_{i:03d}.mp3"
+        parts: list[Path] = [tmp_path / f"{med_id}_{gender}_{length}_{i:03d}.mp3" for i in range(len(segments))]
+
+        async def make_part(i: int, seg):
+            part = parts[i]
             if isinstance(seg, str):
-                await generate_speech(seg, part)
+                async with sem:
+                    await generate_speech(seg, voice, part)
             else:
                 make_silence(float(seg), part)
-            parts.append(part)
+
+        await asyncio.gather(*(make_part(i, s) for i, s in enumerate(segments)))
         concat_mp3s(parts, out_file)
-    print(f"  Wrote {out_file}")
+    print(f"  Wrote {out_file.name}")
 
 
 async def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    only = os.environ.get("ONLY_LENGTH")
+    sem = asyncio.Semaphore(int(os.environ.get("CONCURRENCY", "4")))
+
+    tasks = []
     for med_id, med in MEDITATIONS.items():
-        await build_meditation(med_id, med)
+        for gender, voice in VOICES.items():
+            if only != "10":
+                tasks.append(build_one(med_id, med["segments"], 5, gender, voice, sem))
+            if only != "5" and med_id in MEDITATIONS_10:
+                tasks.append(build_one(med_id, MEDITATIONS_10[med_id], 10, gender, voice, sem))
+
+    await asyncio.gather(*tasks)
     print("Done.")
 
 

@@ -94,19 +94,51 @@ const MEDITATIONS: Meditation[] = [
 ];
 
 const HIDDEN_KEY = "hiddenMeditations";
+const VOICE_KEY = "meditationVoice";
+const LENGTH_KEY = "meditationLength";
+
+type Voice = "female" | "male";
+type Length = 5 | 10;
 
 export default function MeditationsTab() {
   const [playing, setPlaying] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(false);
+  const [voice, setVoice] = useState<Voice>("female");
+  const [length, setLength] = useState<Length>(5);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(HIDDEN_KEY);
       if (raw) setHidden(new Set(JSON.parse(raw)));
+      const v = localStorage.getItem(VOICE_KEY);
+      if (v === "male" || v === "female") setVoice(v);
+      const l = localStorage.getItem(LENGTH_KEY);
+      if (l === "5" || l === "10") setLength(Number(l) as Length);
     } catch {}
   }, []);
+
+  function stopAll() {
+    Object.values(audioRefs.current).forEach((a) => a?.pause());
+    setPlaying(null);
+  }
+
+  function chooseVoice(v: Voice) {
+    setVoice(v);
+    try {
+      localStorage.setItem(VOICE_KEY, v);
+    } catch {}
+    stopAll();
+  }
+
+  function chooseLength(l: Length) {
+    setLength(l);
+    try {
+      localStorage.setItem(LENGTH_KEY, String(l));
+    } catch {}
+    stopAll();
+  }
 
   function persist(next: Set<string>) {
     setHidden(next);
@@ -148,6 +180,40 @@ export default function MeditationsTab() {
         </p>
       </div>
 
+      {/* Voice + length pickers */}
+      <div className="flex justify-center gap-3 flex-wrap">
+        <div className="inline-flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)]">
+          {(["female", "male"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => chooseVoice(v)}
+              className={`px-4 py-1.5 rounded-full text-xs capitalize transition-colors ${
+                voice === v
+                  ? "bg-[var(--accent)] text-white"
+                  : "text-[var(--text-muted)] hover:text-[var(--text)]"
+              }`}
+            >
+              {v} voice
+            </button>
+          ))}
+        </div>
+        <div className="inline-flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)]">
+          {([5, 10] as const).map((l) => (
+            <button
+              key={l}
+              onClick={() => chooseLength(l)}
+              className={`px-4 py-1.5 rounded-full text-xs transition-colors ${
+                length === l
+                  ? "bg-[var(--accent)] text-white"
+                  : "text-[var(--text-muted)] hover:text-[var(--text)]"
+              }`}
+            >
+              {l} min
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="space-y-4">
         {visible.map((m) => (
           <article
@@ -184,10 +250,11 @@ export default function MeditationsTab() {
             </div>
 
             <audio
+              key={`${voice}-${length}`}
               ref={(el) => {
                 audioRefs.current[m.id] = el;
               }}
-              src={`/meditations/${m.id}.mp3`}
+              src={`/meditations/${m.id}-${voice}-${length}.mp3`}
               controls
               preload="none"
               onPlay={() => setPlaying(m.id)}
