@@ -3,6 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import MeditationsTab from "./MeditationsTab";
+
+type Tab = "journal" | "meditations";
 
 interface GratitudeEntry {
   id: string;
@@ -55,6 +58,10 @@ const DEFAULT_AFFIRMATIONS = [
   "I welcome joy into every moment of today.",
 ];
 
+function toLocalDateStr(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   return d.toLocaleDateString("en-US", {
@@ -97,6 +104,12 @@ export default function DashboardPage() {
   const [past3, setPast3] = useState("");
   const [pastSaving, setPastSaving] = useState(false);
   const [showPastEntry, setShowPastEntry] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+
+  const [tab, setTab] = useState<Tab>("journal");
 
   // Affirmation state
   const [todayAffirmation, setTodayAffirmation] = useState<string>("");
@@ -199,8 +212,12 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!past1.trim() || !past2.trim() || !past3.trim() || !pastDate) return;
 
-    // Check if entry already exists for this date
-    const existing = entries.find((en) => en.created_at.split("T")[0] === pastDate);
+    // Check if entry already exists for this date (compare in local time)
+    const existing = entries.find((en) => {
+      const d = new Date(en.created_at);
+      const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return localDate === pastDate;
+    });
     if (existing) {
       alert("An entry already exists for this date. Edit it below instead.");
       return;
@@ -231,7 +248,10 @@ export default function DashboardPage() {
   }
 
   // Dates that already have entries
-  const entryDates = new Set(entries.map((e) => e.created_at.split("T")[0]));
+  const entryDates = new Set(entries.map((e) => {
+    const d = new Date(e.created_at);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }));
 
   function startEditing(entry: GratitudeEntry) {
     setEditingId(entry.id);
@@ -268,12 +288,16 @@ export default function DashboardPage() {
   async function handleAffirmation(approve: boolean) {
     if (!user || !todayAffirmation) return;
 
-    // Check if this affirmation already exists for today
+    // Check if this affirmation already exists for today (use local date)
+    const now = new Date();
+    const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const localTomorrow = (() => { const t = new Date(now); t.setDate(t.getDate() + 1); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; })();
     const { data: existing } = await supabase
       .from("affirmations")
       .select("id")
       .eq("text", todayAffirmation)
-      .gte("shown_at", new Date().toISOString().split("T")[0]);
+      .gte("shown_at", localToday)
+      .lt("shown_at", localTomorrow);
 
     if (existing && existing.length > 0) {
       await supabase
@@ -290,9 +314,15 @@ export default function DashboardPage() {
     }
 
     setAffirmationStatus(approve ? "approved" : "dismissed");
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
-    await loadAffirmations();
+    // Update approved list locally without reloading (avoids timezone-based reset)
+    if (approve) {
+      setApprovedAffirmations(prev => {
+        if (prev.some(a => a.text === todayAffirmation)) return prev;
+        return [...prev, { id: 'temp', text: todayAffirmation, approved: true, dismissed: false, shown_at: new Date().toISOString() }];
+      });
+    } else {
+      setApprovedAffirmations(prev => prev.filter(a => a.text !== todayAffirmation));
+    }
   }
 
   async function handleSignOut() {
@@ -352,7 +382,33 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      {/* Tab navigation */}
+      <nav className="max-w-2xl mx-auto px-6 mb-8">
+        <div className="flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)] w-fit mx-auto">
+          {([
+            { key: "journal", label: "Journal" },
+            { key: "meditations", label: "Meditations" },
+          ] as const).map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-5 py-2 rounded-full text-sm transition-colors ${
+                tab === t.key
+                  ? "bg-[var(--accent)] text-white"
+                  : "text-[var(--text-muted)] hover:text-[var(--text)]"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </nav>
+
       <div className="max-w-2xl mx-auto px-6 space-y-10">
+
+        {tab === "meditations" && <MeditationsTab />}
+
+        {tab === "journal" && <>
 
         {/* Daily Affirmation */}
         {todayAffirmation && (
@@ -379,11 +435,16 @@ export default function DashboardPage() {
                 </button>
               </div>
             ) : (
-              <p className="text-xs text-[var(--text-muted)]">
-                {affirmationStatus === "approved"
-                  ? "Added to your rotation"
-                  : "Removed from circulation"}
-              </p>
+              <div className="flex flex-col items-center gap-2">
+                <div className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium ${
+                  affirmationStatus === "approved"
+                    ? "bg-[var(--pastel-sage)] text-[var(--text)]"
+                    : "bg-[var(--bg)] text-[var(--text-muted)]"
+                }`}>
+                  {affirmationStatus === "approved" ? "✓ Saved to your rotation" : "✗ Removed from circulation"}
+                </div>
+                <p className="text-[10px] text-[var(--text-muted)]">A new affirmation will appear tomorrow</p>
+              </div>
             )}
           </section>
         )}
@@ -460,7 +521,7 @@ export default function DashboardPage() {
         </div>
 
         {showPastEntry && (
-          <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
+          <section id="past-entry-form" className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
             <h2 className="text-lg font-light text-[var(--text)] mb-1">
               Past Reflection
             </h2>
@@ -565,6 +626,7 @@ export default function DashboardPage() {
             {entries.map((entry) => (
               <div
                 key={entry.id}
+                id={`entry-${entry.id}`}
                 className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]"
               >
                 <div className="flex items-center justify-between mb-4">
@@ -638,7 +700,103 @@ export default function DashboardPage() {
             ))}
           </section>
         )}
+
+        </>}
       </div>
+
+      {/* Calendar — fixed right sidebar (Journal tab only) */}
+      {tab === "journal" && <div className="fixed top-24 right-6 w-52 hidden lg:block">
+        <div className="bg-[var(--surface)] rounded-xl p-3 shadow-sm border border-[var(--border)]">
+          <div className="flex items-center justify-between mb-2">
+            <button
+              onClick={() => setCalendarMonth(prev => {
+                const d = new Date(prev.year, prev.month - 1, 1);
+                return { year: d.getFullYear(), month: d.getMonth() };
+              })}
+              className="w-6 h-6 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)] transition-colors text-xs"
+            >
+              ‹
+            </button>
+            <h3 className="text-[11px] font-medium text-[var(--text)]">
+              {new Date(calendarMonth.year, calendarMonth.month).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+            </h3>
+            <button
+              onClick={() => {
+                const now = new Date();
+                if (calendarMonth.year < now.getFullYear() || (calendarMonth.year === now.getFullYear() && calendarMonth.month < now.getMonth())) {
+                  setCalendarMonth(prev => {
+                    const d = new Date(prev.year, prev.month + 1, 1);
+                    return { year: d.getFullYear(), month: d.getMonth() };
+                  });
+                }
+              }}
+              className="w-6 h-6 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)] transition-colors text-xs"
+            >
+              ›
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-px text-center">
+            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+              <div key={i} className="text-[8px] text-[var(--text-muted)] font-medium py-0.5">{d}</div>
+            ))}
+            {(() => {
+              const firstDay = new Date(calendarMonth.year, calendarMonth.month, 1).getDay();
+              const daysInMonth = new Date(calendarMonth.year, calendarMonth.month + 1, 0).getDate();
+              const today = new Date();
+              const todayStr2 = toLocalDateStr(today);
+              const entryDateSet = new Set(entries.map(e => toLocalDateStr(new Date(e.created_at))));
+              const cells = [];
+              for (let i = 0; i < firstDay; i++) cells.push(<div key={`blank-${i}`} />);
+              for (let day = 1; day <= daysInMonth; day++) {
+                const dateStr = `${calendarMonth.year}-${String(calendarMonth.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const hasEntry = entryDateSet.has(dateStr);
+                const isDayToday = dateStr === todayStr2;
+                const isFuture = new Date(dateStr) > today;
+                const entry = hasEntry ? entries.find(e => toLocalDateStr(new Date(e.created_at)) === dateStr) : null;
+                cells.push(
+                  <button
+                    key={day}
+                    disabled={isFuture}
+                    onClick={() => {
+                      if (entry) {
+                        startEditing(entry);
+                        const el = document.getElementById(`entry-${entry.id}`);
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      } else if (!isFuture) {
+                        setPastDate(dateStr);
+                        setShowPastEntry(true);
+                        setPast1(''); setPast2(''); setPast3('');
+                        setTimeout(() => {
+                          const el = document.getElementById('past-entry-form');
+                          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 100);
+                      }
+                    }}
+                    className={`relative w-full aspect-square rounded flex items-center justify-center transition-all ${
+                      isFuture ? 'text-[var(--text-muted)] opacity-25 cursor-default text-[9px]' :
+                      isDayToday ? 'font-bold ring-1.5 ring-[var(--accent)] text-[var(--accent)] text-[10px]' :
+                      hasEntry ? 'cursor-pointer hover:opacity-80 text-[10px]' :
+                      'cursor-pointer hover:bg-[var(--bg)] text-[var(--text-muted)] text-[9px]'
+                    }`}
+                    style={hasEntry ? { backgroundColor: 'var(--pastel-sage)' } : undefined}
+                  >
+                    {day}
+                  </button>
+                );
+              }
+              return cells;
+            })()}
+          </div>
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[var(--border)]">
+            <span className="flex items-center gap-1 text-[8px] text-[var(--text-muted)]">
+              <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: 'var(--pastel-sage)' }} /> Logged
+            </span>
+            <span className="flex items-center gap-1 text-[8px] text-[var(--text-muted)]">
+              <span className="w-2 h-2 rounded-sm ring-1 ring-[var(--accent)]" /> Today
+            </span>
+          </div>
+        </div>
+      </div>}
     </main>
   );
 }
