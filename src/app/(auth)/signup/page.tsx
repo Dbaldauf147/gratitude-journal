@@ -31,7 +31,7 @@ export default function SignupPage() {
       setError(error.message);
       setLoading(false);
     } else {
-      router.push("/dashboard");
+      router.push("/portfolio");
     }
   }
 
@@ -39,8 +39,8 @@ export default function SignupPage() {
     <main className="min-h-screen flex items-center justify-center px-6">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-3xl font-light text-[var(--text)]">Begin Your Journey</h1>
-          <p className="text-sm text-[var(--text-muted)]">Create your gratitude journal</p>
+          <h1 className="text-3xl font-semibold text-[var(--text)]">Create account</h1>
+          <p className="text-sm text-[var(--text-muted)]">Compliance Screening Tool</p>
         </div>
 
         <form onSubmit={handleSignup} className="space-y-4">

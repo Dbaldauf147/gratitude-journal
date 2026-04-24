@@ -5,8 +5,9 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "Gratitude Journal",
-  description: "A calm space to reflect on what you're grateful for, every day.",
+  title: "Compliance Screening Tool",
+  description:
+    "Screen building portfolios against energy benchmarking, audit, BPS, and utility data feed mandates.",
 };
 
 export default function RootLayout({
@@ -16,9 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} min-h-screen`}>
-        {children}
-      </body>
+      <body className={`${inter.variable} min-h-screen`}>{children}</body>
     </html>
   );
 }

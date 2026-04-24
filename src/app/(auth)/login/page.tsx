@@ -24,7 +24,7 @@ export default function LoginPage() {
       setError(error.message);
       setLoading(false);
     } else {
-      router.push("/dashboard");
+      router.push("/portfolio");
     }
   }
 
@@ -32,8 +32,8 @@ export default function LoginPage() {
     <main className="min-h-screen flex items-center justify-center px-6">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-3xl font-light text-[var(--text)]">Welcome Back</h1>
-          <p className="text-sm text-[var(--text-muted)]">Sign in to your journal</p>
+          <h1 className="text-3xl font-semibold text-[var(--text)]">Sign in</h1>
+          <p className="text-sm text-[var(--text-muted)]">Compliance Screening Tool</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
