@@ -23,6 +23,15 @@ interface Affirmation {
   shown_at: string;
 }
 
+interface SavedQuote {
+  id: string;
+  text: string;
+  author: string | null;
+  approved: boolean;
+  dismissed: boolean;
+  shown_at: string;
+}
+
 const PASTEL_COLORS = [
   "var(--pastel-rose)",
   "var(--pastel-lavender)",
@@ -93,6 +102,11 @@ export default function DashboardPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [todayEntry, setTodayEntry] = useState<GratitudeEntry | null>(null);
+  const [monthAgoEntry, setMonthAgoEntry] = useState<GratitudeEntry | null>(null);
+  const [yearAgoEntry, setYearAgoEntry] = useState<GratitudeEntry | null>(null);
+  const [quote, setQuote] = useState<{ quote: string; author: string } | null>(null);
+  const [quoteStatus, setQuoteStatus] = useState<"pending" | "approved" | "dismissed">("pending");
+  const [approvedQuotes, setApprovedQuotes] = useState<SavedQuote[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit1, setEdit1] = useState("");
   const [edit2, setEdit2] = useState("");
@@ -127,6 +141,34 @@ export default function DashboardPage() {
       setEntries(data);
       const todayE = data.find((e) => isToday(e.created_at));
       setTodayEntry(todayE || null);
+
+      const monthAgo = new Date();
+      monthAgo.setMonth(monthAgo.getMonth() - 1);
+      const monthAgoStr = toLocalDateStr(monthAgo);
+      const monthE = data.find((e) => toLocalDateStr(new Date(e.created_at)) === monthAgoStr);
+      setMonthAgoEntry(monthE || null);
+
+      // A year ago today — the 100-entry window above may not reach back a full
+      // year, so look for it in the loaded set first and fall back to a query.
+      const yearAgo = new Date();
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+      const yearAgoStr = toLocalDateStr(yearAgo);
+      const yearE = data.find((e) => toLocalDateStr(new Date(e.created_at)) === yearAgoStr);
+      if (yearE) {
+        setYearAgoEntry(yearE);
+      } else {
+        const dayStart = new Date(yearAgo);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(yearAgo);
+        dayEnd.setHours(23, 59, 59, 999);
+        const { data: yearData } = await supabase
+          .from("gratitude_entries")
+          .select("*")
+          .gte("created_at", dayStart.toISOString())
+          .lte("created_at", dayEnd.toISOString())
+          .limit(1);
+        setYearAgoEntry(yearData?.[0] || null);
+      }
     }
   }, [supabase]);
 
@@ -139,6 +181,12 @@ export default function DashboardPage() {
 
     const all = data || [];
     setApprovedAffirmations(all.filter((a) => a.approved && !a.dismissed));
+
+    if (toLocalDateStr(new Date()) === "2026-05-24") {
+      setTodayAffirmation("Joanne is very very very cool. Like super cool.");
+      setAffirmationStatus("pending");
+      return;
+    }
 
     // Check if there's already one for today
     const todayAff = all.find((a) => isToday(a.shown_at));
@@ -182,6 +230,70 @@ export default function DashboardPage() {
       loadAffirmations();
     }
   }, [user, loadEntries, loadAffirmations]);
+
+  const loadQuotes = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase
+      .from("quotes")
+      .select("*")
+      .order("shown_at", { ascending: false });
+    const all: SavedQuote[] = data || [];
+    setApprovedQuotes(all.filter((q) => q.approved && !q.dismissed));
+
+    const res = await fetch("/api/quote/today");
+    if (!res.ok) return;
+    const d = await res.json();
+    if (!d || !d.quote) return;
+
+    const existing = all.find((q) => q.text === d.quote);
+    if (existing) {
+      setQuoteStatus(existing.approved ? "approved" : existing.dismissed ? "dismissed" : "pending");
+    } else {
+      setQuoteStatus("pending");
+    }
+    setQuote({ quote: d.quote, author: d.author || "" });
+  }, [supabase, user]);
+
+  useEffect(() => {
+    if (user) loadQuotes();
+  }, [user, loadQuotes]);
+
+  async function handleQuote(approve: boolean) {
+    if (!user || !quote) return;
+    const { data: existing } = await supabase
+      .from("quotes")
+      .select("id")
+      .eq("text", quote.quote)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      await supabase
+        .from("quotes")
+        .update({ approved: approve, dismissed: !approve })
+        .eq("id", existing[0].id);
+    } else {
+      await supabase.from("quotes").insert({
+        user_id: user.id,
+        text: quote.quote,
+        author: quote.author || null,
+        approved: approve,
+        dismissed: !approve,
+      });
+    }
+
+    setQuoteStatus(approve ? "approved" : "dismissed");
+    if (approve) {
+      setApprovedQuotes((prev) => {
+        if (prev.some((q) => q.text === quote.quote)) return prev;
+        return [
+          ...prev,
+          { id: "temp", text: quote.quote, author: quote.author || null, approved: true, dismissed: false, shown_at: new Date().toISOString() },
+        ];
+      });
+    } else {
+      setApprovedQuotes((prev) => prev.filter((q) => q.text !== quote.quote));
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -410,33 +522,70 @@ export default function DashboardPage() {
 
         {tab === "journal" && <>
 
-        {/* Daily Affirmation */}
-        {todayAffirmation && (
-          <section className="bg-[var(--pastel-lavender)] rounded-2xl p-8 text-center">
-            <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-4">
-              Today&apos;s Affirmation
+        {/* Today's Quote */}
+        {quote && quoteStatus !== "dismissed" && (
+          <section className="bg-[var(--pastel-rose)] rounded-2xl p-5 text-center">
+            <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
+              Today&apos;s Quote
             </p>
-            <p className="text-lg font-light text-[var(--text)] leading-relaxed italic mb-6">
-              &ldquo;{todayAffirmation}&rdquo;
+            <p className="text-sm font-light text-[var(--text)] leading-relaxed italic">
+              &ldquo;{quote.quote}&rdquo;
             </p>
-            {affirmationStatus === "pending" ? (
-              <div className="flex gap-3 justify-center">
+            {quote.author && (
+              <p className="text-[10px] text-[var(--text-muted)] mt-2 mb-3">
+                — {quote.author}
+              </p>
+            )}
+            {quoteStatus === "pending" ? (
+              <div className="flex gap-2 justify-center mt-3">
                 <button
-                  onClick={() => handleAffirmation(true)}
-                  className="px-6 py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors"
+                  onClick={() => handleQuote(true)}
+                  className="px-4 py-1.5 rounded-full bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors"
                 >
                   Keep in Rotation
                 </button>
                 <button
-                  onClick={() => handleAffirmation(false)}
-                  className="px-6 py-2.5 rounded-full border border-[var(--border)] bg-white text-sm text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                  onClick={() => handleQuote(false)}
+                  className="px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
                 >
                   Remove
                 </button>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-2">
-                <div className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium ${
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-[var(--pastel-sage)] text-[var(--text)] mt-2">
+                ✓ Saved to your rotation
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Daily Affirmation */}
+        {todayAffirmation && (
+          <section className="bg-[var(--pastel-lavender)] rounded-2xl p-5 text-center">
+            <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
+              Today&apos;s Affirmation
+            </p>
+            <p className="text-sm font-light text-[var(--text)] leading-relaxed italic mb-3">
+              &ldquo;{todayAffirmation}&rdquo;
+            </p>
+            {affirmationStatus === "pending" ? (
+              <div className="flex gap-2 justify-center">
+                <button
+                  onClick={() => handleAffirmation(true)}
+                  className="px-4 py-1.5 rounded-full bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors"
+                >
+                  Keep in Rotation
+                </button>
+                <button
+                  onClick={() => handleAffirmation(false)}
+                  className="px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-1.5">
+                <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${
                   affirmationStatus === "approved"
                     ? "bg-[var(--pastel-sage)] text-[var(--text)]"
                     : "bg-[var(--bg)] text-[var(--text-muted)]"
@@ -446,6 +595,60 @@ export default function DashboardPage() {
                 <p className="text-[10px] text-[var(--text-muted)]">A new affirmation will appear tomorrow</p>
               </div>
             )}
+          </section>
+        )}
+
+        {/* A Month Ago Today */}
+        {monthAgoEntry && (
+          <section className="bg-[var(--pastel-sage)] rounded-2xl p-6">
+            <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-1">
+              A Month Ago Today
+            </p>
+            <p className="text-xs text-[var(--text-muted)] mb-4">
+              {formatDate(monthAgoEntry.created_at)}
+            </p>
+            <div className="space-y-3">
+              {[monthAgoEntry.grateful_1, monthAgoEntry.grateful_2, monthAgoEntry.grateful_3].map(
+                (text, i) => (
+                  <div key={i} className="flex items-start gap-3">
+                    <div
+                      className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                      style={{ backgroundColor: PASTEL_COLORS[i] }}
+                    />
+                    <p className="text-sm text-[var(--text)] leading-relaxed italic">
+                      {text}
+                    </p>
+                  </div>
+                )
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* A Year Ago Today */}
+        {yearAgoEntry && (
+          <section className="bg-[var(--pastel-amber)] rounded-2xl p-6">
+            <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-1">
+              A Year Ago Today
+            </p>
+            <p className="text-xs text-[var(--text-muted)] mb-4">
+              {formatDate(yearAgoEntry.created_at)}
+            </p>
+            <div className="space-y-3">
+              {[yearAgoEntry.grateful_1, yearAgoEntry.grateful_2, yearAgoEntry.grateful_3].map(
+                (text, i) => (
+                  <div key={i} className="flex items-start gap-3">
+                    <div
+                      className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                      style={{ backgroundColor: PASTEL_COLORS[i] }}
+                    />
+                    <p className="text-sm text-[var(--text)] leading-relaxed italic">
+                      {text}
+                    </p>
+                  </div>
+                )
+              )}
+            </div>
           </section>
         )}
 
@@ -604,6 +807,46 @@ export default function DashboardPage() {
                           .update({ dismissed: true, approved: false })
                           .eq("id", a.id);
                         await loadAffirmations();
+                      }}
+                      className="text-xs text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
+                      title="Remove from rotation"
+                    >
+                      remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Approved Quotes */}
+        {approvedQuotes.length > 0 && (
+          <section className="space-y-3">
+            <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
+              Your Quotes
+            </h3>
+            <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+              <div className="space-y-4">
+                {approvedQuotes.map((q) => (
+                  <div key={q.id} className="flex items-start gap-3 group">
+                    <div className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-[var(--pastel-rose)]" />
+                    <div className="flex-1">
+                      <p className="text-sm text-[var(--text)] leading-relaxed italic">
+                        {q.text}
+                      </p>
+                      {q.author && (
+                        <p className="text-xs text-[var(--text-muted)] mt-1">— {q.author}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await supabase
+                          .from("quotes")
+                          .update({ dismissed: true, approved: false })
+                          .eq("id", q.id);
+                        setApprovedQuotes((prev) => prev.filter((x) => x.id !== q.id));
+                        if (quote && quote.quote === q.text) setQuoteStatus("dismissed");
                       }}
                       className="text-xs text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
                       title="Remove from rotation"
