@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import MeditationsTab from "./MeditationsTab";
+import { getWordOfTheDay } from "@/lib/koreanWords";
 
 type Tab = "journal" | "meditations";
 
@@ -103,6 +104,7 @@ export default function DashboardPage() {
   const [saved, setSaved] = useState(false);
   const [todayEntry, setTodayEntry] = useState<GratitudeEntry | null>(null);
   const [throwback, setThrowback] = useState<{ entry: GratitudeEntry; label: string } | null>(null);
+  const [koreanWord] = useState(() => getWordOfTheDay());
   const [quote, setQuote] = useState<{ quote: string; author: string } | null>(null);
   const [quoteStatus, setQuoteStatus] = useState<"pending" | "approved" | "dismissed">("pending");
   const [approvedQuotes, setApprovedQuotes] = useState<SavedQuote[]>([]);
@@ -616,6 +618,22 @@ export default function DashboardPage() {
         )}
 
         </div>
+
+        {/* Korean word of the day */}
+        <section className="bg-[var(--pastel-sky)] rounded-2xl p-5 text-center">
+          <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
+            Korean Word of the Day
+          </p>
+          <p className="text-3xl font-light text-[var(--text)] leading-tight">
+            {koreanWord.hangul}
+          </p>
+          <p className="text-xs text-[var(--text-muted)] mt-1 italic">
+            {koreanWord.romanization}
+          </p>
+          <p className="text-sm text-[var(--text)] mt-2">
+            {koreanWord.meaning}
+          </p>
+        </section>
 
         {/* On this day — a year ago, else six months, else a month */}
         {throwback && (
