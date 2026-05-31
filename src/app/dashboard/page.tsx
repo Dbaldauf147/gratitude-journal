@@ -102,8 +102,7 @@ export default function DashboardPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [todayEntry, setTodayEntry] = useState<GratitudeEntry | null>(null);
-  const [monthAgoEntry, setMonthAgoEntry] = useState<GratitudeEntry | null>(null);
-  const [yearAgoEntry, setYearAgoEntry] = useState<GratitudeEntry | null>(null);
+  const [throwback, setThrowback] = useState<{ entry: GratitudeEntry; label: string } | null>(null);
   const [quote, setQuote] = useState<{ quote: string; author: string } | null>(null);
   const [quoteStatus, setQuoteStatus] = useState<"pending" | "approved" | "dismissed">("pending");
   const [approvedQuotes, setApprovedQuotes] = useState<SavedQuote[]>([]);
@@ -142,33 +141,48 @@ export default function DashboardPage() {
       const todayE = data.find((e) => isToday(e.created_at));
       setTodayEntry(todayE || null);
 
-      const monthAgo = new Date();
-      monthAgo.setMonth(monthAgo.getMonth() - 1);
-      const monthAgoStr = toLocalDateStr(monthAgo);
-      const monthE = data.find((e) => toLocalDateStr(new Date(e.created_at)) === monthAgoStr);
-      setMonthAgoEntry(monthE || null);
-
-      // A year ago today — the 100-entry window above may not reach back a full
-      // year, so look for it in the loaded set first and fall back to a query.
-      const yearAgo = new Date();
-      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
-      const yearAgoStr = toLocalDateStr(yearAgo);
-      const yearE = data.find((e) => toLocalDateStr(new Date(e.created_at)) === yearAgoStr);
-      if (yearE) {
-        setYearAgoEntry(yearE);
-      } else {
-        const dayStart = new Date(yearAgo);
+      // "On this day" throwback. The 100-entry window above may not reach back
+      // far enough, so check the loaded set first and fall back to a query.
+      const findForDate = async (date: Date): Promise<GratitudeEntry | null> => {
+        const str = toLocalDateStr(date);
+        const inData = data.find((e) => toLocalDateStr(new Date(e.created_at)) === str);
+        if (inData) return inData;
+        const dayStart = new Date(date);
         dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(yearAgo);
+        const dayEnd = new Date(date);
         dayEnd.setHours(23, 59, 59, 999);
-        const { data: yearData } = await supabase
+        const { data: d } = await supabase
           .from("gratitude_entries")
           .select("*")
           .gte("created_at", dayStart.toISOString())
           .lte("created_at", dayEnd.toISOString())
           .limit(1);
-        setYearAgoEntry(yearData?.[0] || null);
+        return d?.[0] || null;
+      };
+
+      // Priority: a year ago → six months ago → a month ago. Show the first that exists.
+      const yearAgo = new Date();
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      const monthAgo = new Date();
+      monthAgo.setMonth(monthAgo.getMonth() - 1);
+
+      const candidates: { date: Date; label: string }[] = [
+        { date: yearAgo, label: "A Year Ago Today" },
+        { date: sixMonthsAgo, label: "Six Months Ago Today" },
+        { date: monthAgo, label: "A Month Ago Today" },
+      ];
+
+      let found: { entry: GratitudeEntry; label: string } | null = null;
+      for (const c of candidates) {
+        const entry = await findForDate(c.date);
+        if (entry) {
+          found = { entry, label: c.label };
+          break;
+        }
       }
+      setThrowback(found);
     }
   }, [supabase]);
 
@@ -603,44 +617,17 @@ export default function DashboardPage() {
 
         </div>
 
-        {/* A Month Ago Today */}
-        {monthAgoEntry && (
-          <section className="bg-[var(--pastel-sage)] rounded-2xl p-6">
-            <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-1">
-              A Month Ago Today
-            </p>
-            <p className="text-xs text-[var(--text-muted)] mb-4">
-              {formatDate(monthAgoEntry.created_at)}
-            </p>
-            <div className="space-y-3">
-              {[monthAgoEntry.grateful_1, monthAgoEntry.grateful_2, monthAgoEntry.grateful_3].map(
-                (text, i) => (
-                  <div key={i} className="flex items-start gap-3">
-                    <div
-                      className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                      style={{ backgroundColor: PASTEL_COLORS[i] }}
-                    />
-                    <p className="text-sm text-[var(--text)] leading-relaxed italic">
-                      {text}
-                    </p>
-                  </div>
-                )
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* A Year Ago Today */}
-        {yearAgoEntry && (
+        {/* On this day — a year ago, else six months, else a month */}
+        {throwback && (
           <section className="bg-[var(--pastel-amber)] rounded-2xl p-6">
             <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-1">
-              A Year Ago Today
+              {throwback.label}
             </p>
             <p className="text-xs text-[var(--text-muted)] mb-4">
-              {formatDate(yearAgoEntry.created_at)}
+              {formatDate(throwback.entry.created_at)}
             </p>
             <div className="space-y-3">
-              {[yearAgoEntry.grateful_1, yearAgoEntry.grateful_2, yearAgoEntry.grateful_3].map(
+              {[throwback.entry.grateful_1, throwback.entry.grateful_2, throwback.entry.grateful_3].map(
                 (text, i) => (
                   <div key={i} className="flex items-start gap-3">
                     <div
