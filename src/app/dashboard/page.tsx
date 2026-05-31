@@ -522,9 +522,12 @@ export default function DashboardPage() {
 
         {tab === "journal" && <>
 
+        {/* Today's Quote + Affirmation, side by side */}
+        <div className="grid sm:grid-cols-2 gap-4">
+
         {/* Today's Quote */}
         {quote && quoteStatus !== "dismissed" && (
-          <section className="bg-[var(--pastel-rose)] rounded-2xl p-5 text-center">
+          <section className="bg-[var(--pastel-rose)] rounded-2xl p-4 text-center">
             <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
               Today&apos;s Quote
             </p>
@@ -561,7 +564,7 @@ export default function DashboardPage() {
 
         {/* Daily Affirmation */}
         {todayAffirmation && (
-          <section className="bg-[var(--pastel-lavender)] rounded-2xl p-5 text-center">
+          <section className="bg-[var(--pastel-lavender)] rounded-2xl p-4 text-center">
             <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
               Today&apos;s Affirmation
             </p>
@@ -597,6 +600,8 @@ export default function DashboardPage() {
             )}
           </section>
         )}
+
+        </div>
 
         {/* A Month Ago Today */}
         {monthAgoEntry && (
