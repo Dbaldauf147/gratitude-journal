@@ -706,6 +706,9 @@ export default function DashboardPage() {
           <p className="text-xs text-[var(--text-muted)] mt-1 italic">
             {koreanWord.romanization}
           </p>
+          <p className="text-xs text-[var(--text)] mt-2">
+            <span className="text-[var(--text-muted)]">Say it: </span>{koreanWord.sound}
+          </p>
           {meaningRevealed ? (
             <>
               <p className="text-sm text-[var(--text)] mt-3">
