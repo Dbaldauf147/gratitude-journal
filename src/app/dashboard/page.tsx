@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import MeditationsTab from "./MeditationsTab";
-import { getWordOfTheDay } from "@/lib/koreanWords";
+import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
 
 type Tab = "journal" | "meditations";
 
@@ -106,6 +106,58 @@ export default function DashboardPage() {
   const [throwback, setThrowback] = useState<{ entry: GratitudeEntry; label: string } | null>(null);
   const [koreanWord] = useState(() => getWordOfTheDay());
   const [meaningRevealed, setMeaningRevealed] = useState(false);
+  const [learnedWords, setLearnedWords] = useState<KoreanWord[]>([]);
+
+  const todayKey = toLocalDateStr(new Date());
+
+  // Load learned words + restore today's reveal state from localStorage.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("learnedKoreanWords");
+      if (saved) setLearnedWords(JSON.parse(saved));
+      // Meaning stays revealed for the rest of the day, then auto-hides for the next word.
+      if (localStorage.getItem("koreanRevealDate") === todayKey) setMeaningRevealed(true);
+    } catch {
+      /* ignore corrupt/unavailable storage */
+    }
+  }, [todayKey]);
+
+  function revealMeaning() {
+    setMeaningRevealed(true);
+    try {
+      localStorage.setItem("koreanRevealDate", todayKey);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const isLearned = learnedWords.some((w) => w.hangul === koreanWord.hangul);
+
+  function toggleLearned() {
+    setLearnedWords((prev) => {
+      const next = prev.some((w) => w.hangul === koreanWord.hangul)
+        ? prev.filter((w) => w.hangul !== koreanWord.hangul)
+        : [...prev, koreanWord];
+      try {
+        localStorage.setItem("learnedKoreanWords", JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+
+  function removeLearned(hangul: string) {
+    setLearnedWords((prev) => {
+      const next = prev.filter((w) => w.hangul !== hangul);
+      try {
+        localStorage.setItem("learnedKoreanWords", JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
 
   function speakKorean(text: string) {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
@@ -655,18 +707,67 @@ export default function DashboardPage() {
             {koreanWord.romanization}
           </p>
           {meaningRevealed ? (
-            <p className="text-sm text-[var(--text)] mt-3">
-              {koreanWord.meaning}
-            </p>
+            <>
+              <p className="text-sm text-[var(--text)] mt-3">
+                {koreanWord.meaning}
+              </p>
+              <button
+                onClick={toggleLearned}
+                className={`mt-3 px-4 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                  isLearned
+                    ? "bg-[var(--pastel-sage)] text-[var(--text)]"
+                    : "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
+                }`}
+              >
+                {isLearned ? "✓ Learned" : "Mark as learned"}
+              </button>
+            </>
           ) : (
             <button
-              onClick={() => setMeaningRevealed(true)}
+              onClick={revealMeaning}
               className="mt-3 px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
             >
               Tap to reveal meaning
             </button>
           )}
         </section>
+
+        {/* Learned Korean words */}
+        {learnedWords.length > 0 && (
+          <section className="bg-[var(--surface)] rounded-2xl p-5 border border-[var(--border)]">
+            <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
+              Words You&apos;ve Learned ({learnedWords.length})
+            </p>
+            <div className="space-y-2">
+              {learnedWords.map((w) => (
+                <div
+                  key={w.hangul}
+                  className="flex items-center gap-3 py-1.5 border-b border-[var(--border)] last:border-0"
+                >
+                  <button
+                    onClick={() => speakKorean(w.hangul)}
+                    aria-label={`Play pronunciation of ${w.hangul}`}
+                    title="Play pronunciation"
+                    className="w-7 h-7 shrink-0 rounded-full bg-[var(--bg)] hover:bg-[var(--pastel-sky)] flex items-center justify-center text-sm transition-colors"
+                  >
+                    🔊
+                  </button>
+                  <span className="text-base text-[var(--text)] w-20 shrink-0">{w.hangul}</span>
+                  <span className="text-xs text-[var(--text-muted)] italic w-24 shrink-0">{w.romanization}</span>
+                  <span className="text-sm text-[var(--text)] flex-1">{w.meaning}</span>
+                  <button
+                    onClick={() => removeLearned(w.hangul)}
+                    aria-label={`Remove ${w.hangul}`}
+                    title="Remove"
+                    className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none transition-colors"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* On this day — a year ago, else six months, else a month */}
         {throwback && (
