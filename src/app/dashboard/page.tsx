@@ -105,6 +105,20 @@ export default function DashboardPage() {
   const [todayEntry, setTodayEntry] = useState<GratitudeEntry | null>(null);
   const [throwback, setThrowback] = useState<{ entry: GratitudeEntry; label: string } | null>(null);
   const [koreanWord] = useState(() => getWordOfTheDay());
+  const [meaningRevealed, setMeaningRevealed] = useState(false);
+
+  function speakKorean(text: string) {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "ko-KR";
+    utterance.rate = 0.85;
+    const koVoice = window.speechSynthesis
+      .getVoices()
+      .find((v) => v.lang === "ko-KR" || v.lang.startsWith("ko"));
+    if (koVoice) utterance.voice = koVoice;
+    window.speechSynthesis.speak(utterance);
+  }
   const [quote, setQuote] = useState<{ quote: string; author: string } | null>(null);
   const [quoteStatus, setQuoteStatus] = useState<"pending" | "approved" | "dismissed">("pending");
   const [approvedQuotes, setApprovedQuotes] = useState<SavedQuote[]>([]);
@@ -624,15 +638,34 @@ export default function DashboardPage() {
           <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
             Korean Word of the Day
           </p>
-          <p className="text-3xl font-light text-[var(--text)] leading-tight">
-            {koreanWord.hangul}
-          </p>
+          <div className="flex items-center justify-center gap-2">
+            <p className="text-3xl font-light text-[var(--text)] leading-tight">
+              {koreanWord.hangul}
+            </p>
+            <button
+              onClick={() => speakKorean(koreanWord.hangul)}
+              aria-label="Play pronunciation"
+              title="Play pronunciation"
+              className="w-8 h-8 rounded-full bg-white/70 hover:bg-white flex items-center justify-center text-base transition-colors"
+            >
+              🔊
+            </button>
+          </div>
           <p className="text-xs text-[var(--text-muted)] mt-1 italic">
             {koreanWord.romanization}
           </p>
-          <p className="text-sm text-[var(--text)] mt-2">
-            {koreanWord.meaning}
-          </p>
+          {meaningRevealed ? (
+            <p className="text-sm text-[var(--text)] mt-3">
+              {koreanWord.meaning}
+            </p>
+          ) : (
+            <button
+              onClick={() => setMeaningRevealed(true)}
+              className="mt-3 px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+            >
+              Tap to reveal meaning
+            </button>
+          )}
         </section>
 
         {/* On this day — a year ago, else six months, else a month */}
