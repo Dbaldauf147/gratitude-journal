@@ -686,53 +686,59 @@ export default function DashboardPage() {
         </div>
 
         {/* Korean word of the day */}
-        <section className="bg-[var(--pastel-sky)] rounded-2xl p-5 text-center">
+        <section className="bg-[var(--pastel-sky)] rounded-2xl p-5">
           <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
             Korean Word of the Day
           </p>
-          <div className="flex items-center justify-center gap-2">
-            <p className="text-3xl font-light text-[var(--text)] leading-tight">
-              {koreanWord.hangul}
-            </p>
-            <button
-              onClick={() => speakKorean(koreanWord.hangul)}
-              aria-label="Play pronunciation"
-              title="Play pronunciation"
-              className="w-8 h-8 rounded-full bg-white/70 hover:bg-white flex items-center justify-center text-base transition-colors"
-            >
-              🔊
-            </button>
-          </div>
-          <p className="text-xs text-[var(--text-muted)] mt-1 italic">
-            {koreanWord.romanization}
-          </p>
-          <p className="text-xs text-[var(--text)] mt-2">
-            <span className="text-[var(--text-muted)]">Say it: </span>{koreanWord.sound}
-          </p>
-          {meaningRevealed ? (
-            <>
-              <p className="text-sm text-[var(--text)] mt-3">
-                {koreanWord.meaning}
+          <div className="flex items-center gap-4">
+            {/* Left: word + audio */}
+            <div className="flex items-center gap-2 shrink-0">
+              <p className="text-3xl font-light text-[var(--text)] leading-tight">
+                {koreanWord.hangul}
               </p>
               <button
-                onClick={toggleLearned}
-                className={`mt-3 px-4 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                  isLearned
-                    ? "bg-[var(--pastel-sage)] text-[var(--text)]"
-                    : "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
-                }`}
+                onClick={() => speakKorean(koreanWord.hangul)}
+                aria-label="Play pronunciation"
+                title="Play pronunciation"
+                className="w-8 h-8 rounded-full bg-white/70 hover:bg-white flex items-center justify-center text-base transition-colors"
               >
-                {isLearned ? "✓ Learned" : "Mark as learned"}
+                🔊
               </button>
-            </>
-          ) : (
-            <button
-              onClick={revealMeaning}
-              className="mt-3 px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
-            >
-              Tap to reveal meaning
-            </button>
-          )}
+            </div>
+            {/* Right: details */}
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-[var(--text-muted)] italic">
+                {koreanWord.romanization}
+              </p>
+              <p className="text-xs text-[var(--text)] mt-0.5">
+                <span className="text-[var(--text-muted)]">Say it: </span>{koreanWord.sound}
+              </p>
+              <div className="flex items-center gap-3 mt-2">
+                {meaningRevealed ? (
+                  <>
+                    <p className="text-sm text-[var(--text)]">{koreanWord.meaning}</p>
+                    <button
+                      onClick={toggleLearned}
+                      className={`px-4 py-1.5 rounded-full text-xs font-medium shrink-0 transition-colors ${
+                        isLearned
+                          ? "bg-[var(--pastel-sage)] text-[var(--text)]"
+                          : "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
+                      }`}
+                    >
+                      {isLearned ? "✓ Learned" : "Mark as learned"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={revealMeaning}
+                    className="px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                  >
+                    Tap to reveal meaning
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         </section>
 
         {/* Learned Korean words */}
