@@ -95,16 +95,26 @@ const MEDITATIONS: Meditation[] = [
 
 const HIDDEN_KEY = "hiddenMeditations";
 const VOICE_KEY = "meditationVoice";
+const ACCENT_KEY = "meditationAccent";
 const LENGTH_KEY = "meditationLength";
 
 type Voice = "female" | "male";
+type Accent = "us" | "gb" | "ie" | "au";
 type Length = 5 | 10;
+
+const ACCENTS: { id: Accent; label: string }[] = [
+  { id: "us", label: "American" },
+  { id: "gb", label: "British" },
+  { id: "ie", label: "Irish" },
+  { id: "au", label: "Australian" },
+];
 
 export default function MeditationsTab() {
   const [playing, setPlaying] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(false);
   const [voice, setVoice] = useState<Voice>("female");
+  const [accent, setAccent] = useState<Accent>("us");
   const [length, setLength] = useState<Length>(5);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
 
@@ -114,6 +124,8 @@ export default function MeditationsTab() {
       if (raw) setHidden(new Set(JSON.parse(raw)));
       const v = localStorage.getItem(VOICE_KEY);
       if (v === "male" || v === "female") setVoice(v);
+      const a = localStorage.getItem(ACCENT_KEY);
+      if (a === "us" || a === "gb" || a === "ie" || a === "au") setAccent(a);
       const l = localStorage.getItem(LENGTH_KEY);
       if (l === "5" || l === "10") setLength(Number(l) as Length);
     } catch {}
@@ -128,6 +140,14 @@ export default function MeditationsTab() {
     setVoice(v);
     try {
       localStorage.setItem(VOICE_KEY, v);
+    } catch {}
+    stopAll();
+  }
+
+  function chooseAccent(a: Accent) {
+    setAccent(a);
+    try {
+      localStorage.setItem(ACCENT_KEY, a);
     } catch {}
     stopAll();
   }
@@ -180,8 +200,23 @@ export default function MeditationsTab() {
         </p>
       </div>
 
-      {/* Voice + length pickers */}
+      {/* Accent + voice + length pickers */}
       <div className="flex justify-center gap-3 flex-wrap">
+        <div className="inline-flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)]">
+          {ACCENTS.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => chooseAccent(a.id)}
+              className={`px-4 py-1.5 rounded-full text-xs transition-colors ${
+                accent === a.id
+                  ? "bg-[var(--accent)] text-white"
+                  : "text-[var(--text-muted)] hover:text-[var(--text)]"
+              }`}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
         <div className="inline-flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)]">
           {(["female", "male"] as const).map((v) => (
             <button
@@ -250,11 +285,11 @@ export default function MeditationsTab() {
             </div>
 
             <audio
-              key={`${voice}-${length}`}
+              key={`${accent}-${voice}-${length}`}
               ref={(el) => {
                 audioRefs.current[m.id] = el;
               }}
-              src={`/meditations/${m.id}-${voice}-${length}.mp3`}
+              src={`/meditations/${m.id}-${accent}-${voice}-${length}.mp3`}
               controls
               preload="none"
               onPlay={() => setPlaying(m.id)}

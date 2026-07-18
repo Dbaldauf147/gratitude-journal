@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import MeditationsTab from "./MeditationsTab";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
 
-type Tab = "journal" | "meditations";
+type Tab = "journal" | "korean" | "meditations";
 
 interface GratitudeEntry {
   id: string;
@@ -31,6 +31,30 @@ interface SavedQuote {
   approved: boolean;
   dismissed: boolean;
   shown_at: string;
+}
+
+interface PhraseWord {
+  hangul: string;
+  romanization: string;
+  meaning: string;
+  sound: string;
+}
+
+interface PhraseRegister {
+  hangul: string;
+  romanization: string;
+  note: string;
+}
+
+interface PhraseResult {
+  hangul: string;
+  romanization: string;
+  formal?: PhraseRegister;
+  informal?: PhraseRegister;
+  slang?: PhraseRegister;
+  words: PhraseWord[];
+  wholeTip: string;
+  example: { korean: string; english: string };
 }
 
 const PASTEL_COLORS = [
@@ -103,12 +127,52 @@ export default function DashboardPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [todayEntry, setTodayEntry] = useState<GratitudeEntry | null>(null);
-  const [throwback, setThrowback] = useState<{ entry: GratitudeEntry; label: string } | null>(null);
+  const [throwbacks, setThrowbacks] = useState<{ monthAgo: GratitudeEntry | null; yearAgo: GratitudeEntry | null }>({ monthAgo: null, yearAgo: null });
   const [koreanWord] = useState(() => getWordOfTheDay());
   const [meaningRevealed, setMeaningRevealed] = useState(false);
   const [learnedWords, setLearnedWords] = useState<KoreanWord[]>([]);
 
+  // Type-a-phrase tool (Claude-powered translation + per-word pronunciation).
+  const [phraseInput, setPhraseInput] = useState("");
+  const [phraseResult, setPhraseResult] = useState<PhraseResult | null>(null);
+  const [phraseLoading, setPhraseLoading] = useState(false);
+  const [phraseError, setPhraseError] = useState("");
+
   const todayKey = toLocalDateStr(new Date());
+
+  async function submitPhrase(e: React.FormEvent) {
+    e.preventDefault();
+    const phrase = phraseInput.trim();
+    if (!phrase || phraseLoading) return;
+    setPhraseLoading(true);
+    setPhraseError("");
+    setPhraseResult(null);
+    try {
+      const res = await fetch("/api/korean-phrase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phrase }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPhraseError(data?.error || "Something went wrong. Try again.");
+      } else {
+        setPhraseResult(data as PhraseResult);
+        // Persist so the translation survives a page refresh.
+        try {
+          localStorage.setItem(
+            "koreanPhraseTool",
+            JSON.stringify({ input: phrase, result: data })
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      setPhraseError("Couldn't reach the translator. Check your connection and try again.");
+    }
+    setPhraseLoading(false);
+  }
 
   // Load learned words + restore today's reveal state from localStorage.
   useEffect(() => {
@@ -117,6 +181,13 @@ export default function DashboardPage() {
       if (saved) setLearnedWords(JSON.parse(saved));
       // Meaning stays revealed for the rest of the day, then auto-hides for the next word.
       if (localStorage.getItem("koreanRevealDate") === todayKey) setMeaningRevealed(true);
+      // Restore the last translated phrase so it survives a refresh.
+      const savedPhrase = localStorage.getItem("koreanPhraseTool");
+      if (savedPhrase) {
+        const { input, result } = JSON.parse(savedPhrase);
+        if (typeof input === "string") setPhraseInput(input);
+        if (result) setPhraseResult(result as PhraseResult);
+      }
     } catch {
       /* ignore corrupt/unavailable storage */
     }
@@ -228,29 +299,17 @@ export default function DashboardPage() {
         return d?.[0] || null;
       };
 
-      // Priority: a year ago → six months ago → a month ago. Show the first that exists.
-      const yearAgo = new Date();
-      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
-      const sixMonthsAgo = new Date();
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      // Show a month ago today and a year ago today side by side.
       const monthAgo = new Date();
       monthAgo.setMonth(monthAgo.getMonth() - 1);
+      const yearAgo = new Date();
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
 
-      const candidates: { date: Date; label: string }[] = [
-        { date: yearAgo, label: "A Year Ago Today" },
-        { date: sixMonthsAgo, label: "Six Months Ago Today" },
-        { date: monthAgo, label: "A Month Ago Today" },
-      ];
-
-      let found: { entry: GratitudeEntry; label: string } | null = null;
-      for (const c of candidates) {
-        const entry = await findForDate(c.date);
-        if (entry) {
-          found = { entry, label: c.label };
-          break;
-        }
-      }
-      setThrowback(found);
+      const [monthAgoEntry, yearAgoEntry] = await Promise.all([
+        findForDate(monthAgo),
+        findForDate(yearAgo),
+      ]);
+      setThrowbacks({ monthAgo: monthAgoEntry, yearAgo: yearAgoEntry });
     }
   }, [supabase]);
 
@@ -532,6 +591,12 @@ export default function DashboardPage() {
   })();
 
   const name = user?.user_metadata?.full_name?.split(" ")[0] || "";
+
+  // How many of today's three gratitude lines are logged (0/3 → 3/3).
+  // Once today's entry is saved it's complete; otherwise count filled fields live.
+  const todayCount = todayEntry
+    ? 3
+    : [grateful1, grateful2, grateful3].filter((s) => s.trim()).length;
   const streak = (() => {
     let count = 0;
     const today = new Date();
@@ -581,6 +646,7 @@ export default function DashboardPage() {
         <div className="flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)] w-fit mx-auto">
           {([
             { key: "journal", label: "Journal" },
+            { key: "korean", label: "Korean" },
             { key: "meditations", label: "Meditations" },
           ] as const).map((t) => (
             <button
@@ -601,6 +667,62 @@ export default function DashboardPage() {
       <div className="max-w-2xl mx-auto px-6 space-y-10">
 
         {tab === "meditations" && <MeditationsTab />}
+
+        {tab === "korean" && (
+          <section className="bg-[var(--surface)] rounded-2xl p-6 border border-[var(--border)]">
+            <div className="flex items-baseline justify-between mb-4">
+              <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase">
+                Words You&apos;ve Learned
+              </p>
+              {learnedWords.length > 0 && (
+                <span className="text-xs text-[var(--text-muted)]">
+                  {learnedWords.length} {learnedWords.length === 1 ? "word" : "words"}
+                </span>
+              )}
+            </div>
+
+            {learnedWords.length > 0 ? (
+              <div className="space-y-2">
+                {learnedWords.map((w) => (
+                  <div
+                    key={w.hangul}
+                    className="flex items-center gap-3 py-1.5 border-b border-[var(--border)] last:border-0"
+                  >
+                    <button
+                      onClick={() => speakKorean(w.hangul)}
+                      aria-label={`Play pronunciation of ${w.hangul}`}
+                      title="Play pronunciation"
+                      className="w-7 h-7 shrink-0 rounded-full bg-[var(--bg)] hover:bg-[var(--pastel-sky)] flex items-center justify-center text-sm transition-colors"
+                    >
+                      🔊
+                    </button>
+                    <span className="text-base text-[var(--text)] w-20 shrink-0">{w.hangul}</span>
+                    <span className="text-xs text-[var(--text-muted)] italic w-24 shrink-0">{w.romanization}</span>
+                    <span className="text-sm text-[var(--text)] flex-1">{w.meaning}</span>
+                    <button
+                      onClick={() => removeLearned(w.hangul)}
+                      aria-label={`Remove ${w.hangul}`}
+                      title="Remove"
+                      className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none transition-colors"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <div className="text-3xl mb-3">📚</div>
+                <p className="text-sm text-[var(--text-muted)]">
+                  No saved words yet.
+                </p>
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  On the Journal tab, tap &ldquo;Mark as learned&rdquo; on the Korean Word of the Day to save it here.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
 
         {tab === "journal" && <>
 
@@ -685,6 +807,127 @@ export default function DashboardPage() {
 
         </div>
 
+        {/* On this day — a month ago and a year ago, side by side */}
+        {(throwbacks.monthAgo || throwbacks.yearAgo) && (
+          <section className="bg-[var(--pastel-amber)] rounded-2xl p-6">
+            <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-4">
+              On This Day
+            </p>
+            <div className="grid sm:grid-cols-2 gap-6 sm:divide-x divide-[var(--border)]">
+              {([
+                { label: "A Month Ago Today", entry: throwbacks.monthAgo },
+                { label: "A Year Ago Today", entry: throwbacks.yearAgo },
+              ] as const).map(({ label, entry }, col) => (
+                <div key={label} className={col === 1 ? "sm:pl-6" : ""}>
+                  <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-1">
+                    {label}
+                  </p>
+                  {entry ? (
+                    <>
+                      <p className="text-xs text-[var(--text-muted)] mb-3">
+                        {formatDate(entry.created_at)}
+                      </p>
+                      <div className="space-y-3">
+                        {[entry.grateful_1, entry.grateful_2, entry.grateful_3].map(
+                          (text, i) => (
+                            <div key={i} className="flex items-start gap-3">
+                              <div
+                                className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                                style={{ backgroundColor: PASTEL_COLORS[i] }}
+                              />
+                              <p className="text-sm text-[var(--text)] leading-relaxed italic">
+                                {text}
+                              </p>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-[var(--text-muted)] italic mt-2">
+                      No entry from this day.
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Today's Entry Form */}
+        {!todayEntry ? (
+          <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-light text-[var(--text)] mb-1">
+                  Tonight&apos;s Reflection
+                </h2>
+                <p className="text-xs text-[var(--text-muted)] mb-6">
+                  What are three things you&apos;re grateful for today?
+                </p>
+              </div>
+              <span
+                className="shrink-0 flex items-center gap-1 text-xs font-medium text-[var(--accent)] bg-[var(--pastel-rose)] px-3 py-1 rounded-full"
+                title="Gratitude logged today"
+              >
+                {todayCount}/3 logged
+              </span>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {[
+                { value: grateful1, setter: setGrateful1, idx: 0 },
+                { value: grateful2, setter: setGrateful2, idx: 1 },
+                { value: grateful3, setter: setGrateful3, idx: 2 },
+              ].map(({ value, setter, idx }) => (
+                <div key={idx} className="flex items-start gap-3">
+                  <div
+                    className="w-2 h-2 rounded-full mt-3.5 shrink-0"
+                    style={{ backgroundColor: PASTEL_COLORS[idx] }}
+                  />
+                  <textarea
+                    value={value}
+                    onChange={(e) => setter(e.target.value)}
+                    placeholder={PLACEHOLDERS[idx]}
+                    required
+                    rows={2}
+                    className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
+                  />
+                </div>
+              ))}
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="w-full py-3 rounded-full bg-[var(--accent)] text-white text-sm font-medium tracking-wide hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : "Save Today's Gratitude"}
+                </button>
+              </div>
+            </form>
+          </section>
+        ) : (
+          <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)] text-center">
+            <div className="text-3xl mb-3">&#10024;</div>
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] bg-[var(--pastel-rose)] px-3 py-1 rounded-full mb-3">
+              3/3 logged
+            </span>
+            <h2 className="text-lg font-light text-[var(--text)] mb-1">
+              Today&apos;s reflection is complete
+            </h2>
+            <p className="text-xs text-[var(--text-muted)] mb-4">
+              Come back tomorrow evening to continue your practice.
+            </p>
+            <button
+              onClick={() => startEditing(todayEntry)}
+              className="text-xs text-[var(--accent)] hover:underline"
+            >
+              Edit today&apos;s entry
+            </button>
+          </section>
+        )}
+
         {/* Korean word of the day */}
         <section className="bg-[var(--pastel-sky)] rounded-2xl p-5">
           <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
@@ -739,132 +982,142 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
-        </section>
 
-        {/* Learned Korean words */}
-        {learnedWords.length > 0 && (
-          <section className="bg-[var(--surface)] rounded-2xl p-5 border border-[var(--border)]">
+          {/* Type a phrase → Claude translates + breaks it down */}
+          <div className="mt-5 pt-5 border-t border-white/40">
             <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
-              Words You&apos;ve Learned ({learnedWords.length})
+              Translate a Phrase
             </p>
-            <div className="space-y-2">
-              {learnedWords.map((w) => (
-                <div
-                  key={w.hangul}
-                  className="flex items-center gap-3 py-1.5 border-b border-[var(--border)] last:border-0"
-                >
-                  <button
-                    onClick={() => speakKorean(w.hangul)}
-                    aria-label={`Play pronunciation of ${w.hangul}`}
-                    title="Play pronunciation"
-                    className="w-7 h-7 shrink-0 rounded-full bg-[var(--bg)] hover:bg-[var(--pastel-sky)] flex items-center justify-center text-sm transition-colors"
-                  >
-                    🔊
-                  </button>
-                  <span className="text-base text-[var(--text)] w-20 shrink-0">{w.hangul}</span>
-                  <span className="text-xs text-[var(--text-muted)] italic w-24 shrink-0">{w.romanization}</span>
-                  <span className="text-sm text-[var(--text)] flex-1">{w.meaning}</span>
-                  <button
-                    onClick={() => removeLearned(w.hangul)}
-                    aria-label={`Remove ${w.hangul}`}
-                    title="Remove"
-                    className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none transition-colors"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* On this day — a year ago, else six months, else a month */}
-        {throwback && (
-          <section className="bg-[var(--pastel-amber)] rounded-2xl p-6">
-            <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-1">
-              {throwback.label}
-            </p>
-            <p className="text-xs text-[var(--text-muted)] mb-4">
-              {formatDate(throwback.entry.created_at)}
-            </p>
-            <div className="space-y-3">
-              {[throwback.entry.grateful_1, throwback.entry.grateful_2, throwback.entry.grateful_3].map(
-                (text, i) => (
-                  <div key={i} className="flex items-start gap-3">
-                    <div
-                      className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                      style={{ backgroundColor: PASTEL_COLORS[i] }}
-                    />
-                    <p className="text-sm text-[var(--text)] leading-relaxed italic">
-                      {text}
-                    </p>
-                  </div>
-                )
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* Today's Entry Form */}
-        {!todayEntry ? (
-          <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
-            <h2 className="text-lg font-light text-[var(--text)] mb-1">
-              Tonight&apos;s Reflection
-            </h2>
-            <p className="text-xs text-[var(--text-muted)] mb-6">
-              What are three things you&apos;re grateful for today?
-            </p>
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {[
-                { value: grateful1, setter: setGrateful1, idx: 0 },
-                { value: grateful2, setter: setGrateful2, idx: 1 },
-                { value: grateful3, setter: setGrateful3, idx: 2 },
-              ].map(({ value, setter, idx }) => (
-                <div key={idx} className="flex items-start gap-3">
-                  <div
-                    className="w-2 h-2 rounded-full mt-3.5 shrink-0"
-                    style={{ backgroundColor: PASTEL_COLORS[idx] }}
-                  />
-                  <textarea
-                    value={value}
-                    onChange={(e) => setter(e.target.value)}
-                    placeholder={PLACEHOLDERS[idx]}
-                    required
-                    rows={2}
-                    className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
-                  />
-                </div>
-              ))}
-
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="w-full py-3 rounded-full bg-[var(--accent)] text-white text-sm font-medium tracking-wide hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
-                >
-                  {saving ? "Saving..." : "Save Today's Gratitude"}
-                </button>
-              </div>
+            <form onSubmit={submitPhrase} className="flex gap-2">
+              <input
+                type="text"
+                value={phraseInput}
+                onChange={(e) => setPhraseInput(e.target.value)}
+                placeholder="Type an English phrase, e.g. “Where is the bathroom?”"
+                maxLength={200}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-white/70 border border-white text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors"
+              />
+              <button
+                type="submit"
+                disabled={phraseLoading || !phraseInput.trim()}
+                className="px-4 py-2.5 rounded-xl bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 shrink-0"
+              >
+                {phraseLoading ? "…" : "Translate"}
+              </button>
             </form>
-          </section>
-        ) : (
-          <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)] text-center">
-            <div className="text-3xl mb-3">&#10024;</div>
-            <h2 className="text-lg font-light text-[var(--text)] mb-1">
-              Today&apos;s reflection is complete
-            </h2>
-            <p className="text-xs text-[var(--text-muted)] mb-4">
-              Come back tomorrow evening to continue your practice.
-            </p>
-            <button
-              onClick={() => startEditing(todayEntry)}
-              className="text-xs text-[var(--accent)] hover:underline"
-            >
-              Edit today&apos;s entry
-            </button>
-          </section>
-        )}
+
+            {phraseError && (
+              <p className="text-xs text-red-400 mt-3">{phraseError}</p>
+            )}
+
+            {phraseResult && (
+              <div className="mt-4 space-y-4">
+                {/* Whole phrase — formal & informal registers */}
+                {phraseResult.formal && phraseResult.informal ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {[
+                      { label: "Formal", reg: phraseResult.formal },
+                      { label: "Informal", reg: phraseResult.informal },
+                      ...(phraseResult.slang
+                        ? [{ label: "Slang", reg: phraseResult.slang }]
+                        : []),
+                    ].map(({ label, reg }) => (
+                      <div key={label} className="bg-white/50 rounded-xl p-3">
+                        <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-1.5">
+                          {label}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-xl font-light text-[var(--text)] leading-tight">
+                            {reg.hangul}
+                          </p>
+                          <button
+                            onClick={() => speakKorean(reg.hangul)}
+                            aria-label={`Play ${label.toLowerCase()} pronunciation`}
+                            title="Play pronunciation"
+                            className="w-7 h-7 rounded-full bg-white/70 hover:bg-white flex items-center justify-center text-sm transition-colors shrink-0"
+                          >
+                            🔊
+                          </button>
+                        </div>
+                        <p className="text-xs text-[var(--text-muted)] italic mt-0.5">
+                          {reg.romanization}
+                        </p>
+                        <p className="text-[11px] text-[var(--text-muted)] mt-1.5">
+                          {reg.note}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <p className="text-2xl font-light text-[var(--text)] leading-tight">
+                        {phraseResult.hangul}
+                      </p>
+                      <button
+                        onClick={() => speakKorean(phraseResult.hangul)}
+                        aria-label="Play pronunciation"
+                        title="Play pronunciation"
+                        className="w-8 h-8 rounded-full bg-white/70 hover:bg-white flex items-center justify-center text-base transition-colors shrink-0"
+                      >
+                        🔊
+                      </button>
+                    </div>
+                    <p className="text-xs text-[var(--text-muted)] italic -mt-2">
+                      {phraseResult.romanization}
+                    </p>
+                  </>
+                )}
+
+                {/* Word-by-word */}
+                <div className="space-y-2">
+                  {phraseResult.words.map((w, i) => (
+                    <div
+                      key={i}
+                      className="flex items-start gap-3 py-1.5 border-b border-white/40 last:border-0"
+                    >
+                      <button
+                        onClick={() => speakKorean(w.hangul)}
+                        aria-label={`Play pronunciation of ${w.hangul}`}
+                        title="Play pronunciation"
+                        className="w-7 h-7 shrink-0 rounded-full bg-white/60 hover:bg-white flex items-center justify-center text-sm transition-colors"
+                      >
+                        🔊
+                      </button>
+                      <div className="min-w-0">
+                        <p className="text-base text-[var(--text)]">
+                          {w.hangul}{" "}
+                          <span className="text-xs text-[var(--text-muted)] italic">
+                            {w.romanization}
+                          </span>{" "}
+                          <span className="text-sm text-[var(--text)]">— {w.meaning}</span>
+                        </p>
+                        <p className="text-xs text-[var(--text)]">
+                          <span className="text-[var(--text-muted)]">Say it: </span>
+                          {w.sound}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Whole-phrase tip */}
+                <p className="text-xs text-[var(--text)]">
+                  <span className="text-[var(--text-muted)]">Whole phrase: </span>
+                  {phraseResult.wholeTip}
+                </p>
+
+                {/* Example */}
+                <div className="bg-white/50 rounded-xl p-3">
+                  <p className="text-sm text-[var(--text)]">{phraseResult.example.korean}</p>
+                  <p className="text-xs text-[var(--text-muted)] italic mt-0.5">
+                    {phraseResult.example.english}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
 
         {/* Past Entry */}
         <div className="text-center">

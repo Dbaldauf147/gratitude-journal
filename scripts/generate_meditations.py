@@ -12,10 +12,26 @@ from pathlib import Path
 import edge_tts
 
 VOICES = {
-    "female": "en-US-AvaMultilingualNeural",
-    "male": "en-US-AndrewMultilingualNeural",
+    "us": {
+        "female": "en-US-AvaMultilingualNeural",
+        "male": "en-US-AndrewMultilingualNeural",
+    },
+    "gb": {
+        "female": "en-GB-SoniaNeural",
+        "male": "en-GB-RyanNeural",
+    },
+    "ie": {
+        "female": "en-IE-EmilyNeural",
+        "male": "en-IE-ConnorNeural",
+    },
+    "au": {
+        "female": "en-AU-NatashaNeural",
+        "male": "en-AU-WilliamNeural",
+    },
 }
 RATE = "-20%"
+PITCH = "-5Hz"
+VOLUME = "-10%"
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "public" / "meditations"
 
@@ -731,7 +747,9 @@ async def generate_speech(text: str, voice: str, out_path: Path) -> None:
     last_err: Exception | None = None
     for attempt in range(5):
         try:
-            communicate = edge_tts.Communicate(text, voice, rate=RATE)
+            communicate = edge_tts.Communicate(
+                text, voice, rate=RATE, pitch=PITCH, volume=VOLUME
+            )
             await communicate.save(str(out_path))
             await asyncio.sleep(0.4)
             return
@@ -765,7 +783,7 @@ def concat_mp3s(parts: list[Path], out_path: Path) -> None:
         [
             "ffmpeg", "-y", "-loglevel", "error",
             "-f", "concat", "-safe", "0", "-i", str(list_file),
-            "-c:a", "libmp3lame", "-b:a", "64k",
+            "-c:a", "libmp3lame", "-b:a", "32k", "-ac", "1",
             str(out_path),
         ],
         check=True,
@@ -773,15 +791,15 @@ def concat_mp3s(parts: list[Path], out_path: Path) -> None:
     list_file.unlink(missing_ok=True)
 
 
-async def build_one(med_id: str, segments: list, length: int, gender: str, voice: str, sem: asyncio.Semaphore) -> None:
-    out_file = OUT_DIR / f"{med_id}-{gender}-{length}.mp3"
+async def build_one(med_id: str, segments: list, length: int, accent: str, gender: str, voice: str, sem: asyncio.Semaphore) -> None:
+    out_file = OUT_DIR / f"{med_id}-{accent}-{gender}-{length}.mp3"
     if out_file.exists() and os.environ.get("SKIP_EXISTING") == "1":
         print(f"Skipping {out_file.name} (exists)")
         return
     print(f"Starting {out_file.name}...")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        parts: list[Path] = [tmp_path / f"{med_id}_{gender}_{length}_{i:03d}.mp3" for i in range(len(segments))]
+        parts: list[Path] = [tmp_path / f"{med_id}_{accent}_{gender}_{length}_{i:03d}.mp3" for i in range(len(segments))]
 
         async def make_part(i: int, seg):
             part = parts[i]
@@ -799,15 +817,19 @@ async def build_one(med_id: str, segments: list, length: int, gender: str, voice
 async def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     only = os.environ.get("ONLY_LENGTH")
+    only_accent = os.environ.get("ONLY_ACCENT")
     sem = asyncio.Semaphore(int(os.environ.get("CONCURRENCY", "4")))
 
     tasks = []
     for med_id, med in MEDITATIONS.items():
-        for gender, voice in VOICES.items():
-            if only != "10":
-                tasks.append(build_one(med_id, med["segments"], 5, gender, voice, sem))
-            if only != "5" and med_id in MEDITATIONS_10:
-                tasks.append(build_one(med_id, MEDITATIONS_10[med_id], 10, gender, voice, sem))
+        for accent, voices in VOICES.items():
+            if only_accent and accent != only_accent:
+                continue
+            for gender, voice in voices.items():
+                if only != "10":
+                    tasks.append(build_one(med_id, med["segments"], 5, accent, gender, voice, sem))
+                if only != "5" and med_id in MEDITATIONS_10:
+                    tasks.append(build_one(med_id, MEDITATIONS_10[med_id], 10, accent, gender, voice, sem))
 
     await asyncio.gather(*tasks)
     print("Done.")

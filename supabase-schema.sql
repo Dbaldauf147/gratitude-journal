@@ -29,3 +29,31 @@ create policy "Users can insert their own entries"
 create policy "Users can delete their own entries"
   on gratitude_entries for delete
   using (auth.uid() = user_id);
+
+-- Quotes (calendar-sourced; track which ones the user keeps vs dismisses)
+create table if not exists public.quotes (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  text text not null,
+  author text,
+  approved boolean default false not null,
+  dismissed boolean default false not null,
+  shown_at timestamptz default now() not null,
+  created_at timestamptz default now() not null
+);
+
+create index if not exists idx_quotes_user_id on public.quotes(user_id);
+
+alter table public.quotes enable row level security;
+
+create policy "Users can view their own quotes"
+  on public.quotes for select using (auth.uid() = user_id);
+
+create policy "Users can insert their own quotes"
+  on public.quotes for insert with check (auth.uid() = user_id);
+
+create policy "Users can update their own quotes"
+  on public.quotes for update using (auth.uid() = user_id);
+
+create policy "Users can delete their own quotes"
+  on public.quotes for delete using (auth.uid() = user_id);
