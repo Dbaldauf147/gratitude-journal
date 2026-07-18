@@ -57,6 +57,13 @@ interface PhraseResult {
   example: { korean: string; english: string };
 }
 
+interface SavedPhrase {
+  id: string;
+  korean: string;
+  translation: string;
+  added: number;
+}
+
 const PASTEL_COLORS = [
   "var(--pastel-rose)",
   "var(--pastel-lavender)",
@@ -132,6 +139,12 @@ export default function DashboardPage() {
   const [meaningRevealed, setMeaningRevealed] = useState(false);
   const [learnedWords, setLearnedWords] = useState<KoreanWord[]>([]);
 
+  // Manually saved Korean phrases (Korean tab). Translation is hidden until held.
+  const [savedPhrases, setSavedPhrases] = useState<SavedPhrase[]>([]);
+  const [phraseKorean, setPhraseKorean] = useState("");
+  const [phraseTranslation, setPhraseTranslation] = useState("");
+  const [revealedPhraseId, setRevealedPhraseId] = useState<string | null>(null);
+
   // Type-a-phrase tool (Claude-powered translation + per-word pronunciation).
   const [phraseInput, setPhraseInput] = useState("");
   const [phraseResult, setPhraseResult] = useState<PhraseResult | null>(null);
@@ -179,6 +192,8 @@ export default function DashboardPage() {
     try {
       const saved = localStorage.getItem("learnedKoreanWords");
       if (saved) setLearnedWords(JSON.parse(saved));
+      const savedP = localStorage.getItem("savedKoreanPhrases");
+      if (savedP) setSavedPhrases(JSON.parse(savedP));
       // Meaning stays revealed for the rest of the day, then auto-hides for the next word.
       if (localStorage.getItem("koreanRevealDate") === todayKey) setMeaningRevealed(true);
       // Restore the last translated phrase so it survives a refresh.
@@ -228,6 +243,37 @@ export default function DashboardPage() {
       }
       return next;
     });
+  }
+
+  function persistPhrases(next: SavedPhrase[]) {
+    setSavedPhrases(next);
+    try {
+      localStorage.setItem("savedKoreanPhrases", JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function addPhrase(e: React.FormEvent) {
+    e.preventDefault();
+    const korean = phraseKorean.trim();
+    if (!korean) return;
+    const entry: SavedPhrase = {
+      id:
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${savedPhrases.length}`,
+      korean,
+      translation: phraseTranslation.trim(),
+      added: Date.now(),
+    };
+    persistPhrases([entry, ...savedPhrases]);
+    setPhraseKorean("");
+    setPhraseTranslation("");
+  }
+
+  function removePhrase(id: string) {
+    persistPhrases(savedPhrases.filter((p) => p.id !== id));
   }
 
   function speakKorean(text: string) {
@@ -669,59 +715,152 @@ export default function DashboardPage() {
         {tab === "meditations" && <MeditationsTab />}
 
         {tab === "korean" && (
-          <section className="bg-[var(--surface)] rounded-2xl p-6 border border-[var(--border)]">
-            <div className="flex items-baseline justify-between mb-4">
-              <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase">
-                Words You&apos;ve Learned
+          <div className="space-y-8">
+            {/* Add a phrase */}
+            <section className="bg-[var(--surface)] rounded-2xl p-6 border border-[var(--border)]">
+              <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
+                Add a Phrase
               </p>
-              {learnedWords.length > 0 && (
-                <span className="text-xs text-[var(--text-muted)]">
-                  {learnedWords.length} {learnedWords.length === 1 ? "word" : "words"}
-                </span>
-              )}
-            </div>
+              <form onSubmit={addPhrase} className="space-y-3">
+                <input
+                  type="text"
+                  value={phraseKorean}
+                  onChange={(e) => setPhraseKorean(e.target.value)}
+                  placeholder="Korean phrase, e.g. 안녕하세요"
+                  maxLength={200}
+                  className="w-full px-4 py-2.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors"
+                />
+                <input
+                  type="text"
+                  value={phraseTranslation}
+                  onChange={(e) => setPhraseTranslation(e.target.value)}
+                  placeholder="Translation (stays hidden until you hold the phrase)"
+                  maxLength={200}
+                  className="w-full px-4 py-2.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors"
+                />
+                <button
+                  type="submit"
+                  disabled={!phraseKorean.trim()}
+                  className="w-full py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                >
+                  Save Phrase
+                </button>
+              </form>
+            </section>
 
-            {learnedWords.length > 0 ? (
-              <div className="space-y-2">
-                {learnedWords.map((w) => (
-                  <div
-                    key={w.hangul}
-                    className="flex items-center gap-3 py-1.5 border-b border-[var(--border)] last:border-0"
-                  >
-                    <button
-                      onClick={() => speakKorean(w.hangul)}
-                      aria-label={`Play pronunciation of ${w.hangul}`}
-                      title="Play pronunciation"
-                      className="w-7 h-7 shrink-0 rounded-full bg-[var(--bg)] hover:bg-[var(--pastel-sky)] flex items-center justify-center text-sm transition-colors"
-                    >
-                      🔊
-                    </button>
-                    <span className="text-base text-[var(--text)] w-20 shrink-0">{w.hangul}</span>
-                    <span className="text-xs text-[var(--text-muted)] italic w-24 shrink-0">{w.romanization}</span>
-                    <span className="text-sm text-[var(--text)] flex-1">{w.meaning}</span>
-                    <button
-                      onClick={() => removeLearned(w.hangul)}
-                      aria-label={`Remove ${w.hangul}`}
-                      title="Remove"
-                      className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none transition-colors"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <div className="text-3xl mb-3">📚</div>
-                <p className="text-sm text-[var(--text-muted)]">
-                  No saved words yet.
+            {/* My phrases — hold to reveal the translation */}
+            {savedPhrases.length > 0 && (
+              <section className="bg-[var(--surface)] rounded-2xl p-6 border border-[var(--border)]">
+                <div className="flex items-baseline justify-between mb-1">
+                  <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase">
+                    My Phrases
+                  </p>
+                  <span className="text-xs text-[var(--text-muted)]">
+                    {savedPhrases.length} {savedPhrases.length === 1 ? "phrase" : "phrases"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[var(--text-muted)] mb-4">
+                  Press and hold a phrase to reveal its translation.
                 </p>
-                <p className="text-xs text-[var(--text-muted)] mt-1">
-                  On the Journal tab, tap &ldquo;Mark as learned&rdquo; on the Korean Word of the Day to save it here.
-                </p>
-              </div>
+                <div className="space-y-2">
+                  {savedPhrases.map((p) => {
+                    const revealed = revealedPhraseId === p.id;
+                    return (
+                      <div
+                        key={p.id}
+                        className="flex items-center gap-3 py-2 border-b border-[var(--border)] last:border-0"
+                      >
+                        <button
+                          onClick={() => speakKorean(p.korean)}
+                          aria-label={`Play pronunciation of ${p.korean}`}
+                          title="Play pronunciation"
+                          className="w-7 h-7 shrink-0 rounded-full bg-[var(--bg)] hover:bg-[var(--pastel-sky)] flex items-center justify-center text-sm transition-colors"
+                        >
+                          🔊
+                        </button>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          title="Hold to reveal translation"
+                          className="flex-1 min-w-0 cursor-pointer select-none"
+                          onPointerDown={() => setRevealedPhraseId(p.id)}
+                          onPointerUp={() => setRevealedPhraseId(null)}
+                          onPointerLeave={() =>
+                            setRevealedPhraseId((cur) => (cur === p.id ? null : cur))
+                          }
+                          onPointerCancel={() => setRevealedPhraseId(null)}
+                          onContextMenu={(e) => e.preventDefault()}
+                        >
+                          <p className="text-base text-[var(--text)]">{p.korean}</p>
+                          <p className="text-sm mt-0.5 min-h-[1.25rem]">
+                            {revealed ? (
+                              <span className="text-[var(--text-muted)]">
+                                {p.translation || "No translation saved"}
+                              </span>
+                            ) : (
+                              <span className="text-[var(--text-muted)] opacity-40 italic">
+                                Hold to reveal
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => removePhrase(p.id)}
+                          aria-label={`Remove ${p.korean}`}
+                          title="Remove"
+                          className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none transition-colors shrink-0"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
             )}
-          </section>
+
+            {/* Words You've Learned — from the Word of the Day */}
+            {learnedWords.length > 0 && (
+              <section className="bg-[var(--surface)] rounded-2xl p-6 border border-[var(--border)]">
+                <div className="flex items-baseline justify-between mb-4">
+                  <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase">
+                    Words You&apos;ve Learned
+                  </p>
+                  <span className="text-xs text-[var(--text-muted)]">
+                    {learnedWords.length} {learnedWords.length === 1 ? "word" : "words"}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {learnedWords.map((w) => (
+                    <div
+                      key={w.hangul}
+                      className="flex items-center gap-3 py-1.5 border-b border-[var(--border)] last:border-0"
+                    >
+                      <button
+                        onClick={() => speakKorean(w.hangul)}
+                        aria-label={`Play pronunciation of ${w.hangul}`}
+                        title="Play pronunciation"
+                        className="w-7 h-7 shrink-0 rounded-full bg-[var(--bg)] hover:bg-[var(--pastel-sky)] flex items-center justify-center text-sm transition-colors"
+                      >
+                        🔊
+                      </button>
+                      <span className="text-base text-[var(--text)] w-20 shrink-0">{w.hangul}</span>
+                      <span className="text-xs text-[var(--text-muted)] italic w-24 shrink-0">{w.romanization}</span>
+                      <span className="text-sm text-[var(--text)] flex-1">{w.meaning}</span>
+                      <button
+                        onClick={() => removeLearned(w.hangul)}
+                        aria-label={`Remove ${w.hangul}`}
+                        title="Remove"
+                        className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none transition-colors"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
         )}
 
         {tab === "journal" && <>
