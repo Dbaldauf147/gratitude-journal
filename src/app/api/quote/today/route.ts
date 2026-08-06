@@ -1,36 +1,6 @@
+import { parseICS } from "@/lib/ics";
+
 export const revalidate = 3600;
-
-type VEvent = { summary?: string; description?: string; dtstart?: string };
-
-function parseICS(text: string): VEvent[] {
-  const unfolded = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
-  const lines = unfolded.split(/\r?\n/);
-  const events: VEvent[] = [];
-  let current: VEvent | null = null;
-
-  const unescape = (s: string) =>
-    s.replace(/\\n/gi, "\n").replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\\\\/g, "\\");
-
-  for (const raw of lines) {
-    const line = raw;
-    if (line === "BEGIN:VEVENT") {
-      current = {};
-    } else if (line === "END:VEVENT") {
-      if (current) events.push(current);
-      current = null;
-    } else if (current) {
-      const idx = line.indexOf(":");
-      if (idx === -1) continue;
-      const keyPart = line.slice(0, idx);
-      const val = line.slice(idx + 1);
-      const key = keyPart.split(";")[0];
-      if (key === "SUMMARY") current.summary = unescape(val).trim();
-      else if (key === "DESCRIPTION") current.description = unescape(val).trim();
-      else if (key === "DTSTART") current.dtstart = val.trim();
-    }
-  }
-  return events;
-}
 
 export async function GET() {
   const url = process.env.QUOTES_ICAL_URL;

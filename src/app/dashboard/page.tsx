@@ -4,9 +4,11 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import MeditationsTab from "./MeditationsTab";
+import JokesTab from "./JokesTab";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
+import { ownsJokes } from "@/lib/roles";
 
-type Tab = "journal" | "korean" | "meditations";
+type Tab = "journal" | "korean" | "meditations" | "jokes";
 
 interface GratitudeEntry {
   id: string;
@@ -660,6 +662,16 @@ export default function DashboardPage() {
     return count;
   })();
 
+  // Jokes are one account's, by request — the tab isn't there for anyone else,
+  // and row-level security keeps the rows out of reach even if it were.
+  const jokesOwner = ownsJokes(user?.email);
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "journal", label: "Journal" },
+    { key: "korean", label: "Korean" },
+    { key: "meditations", label: "Meditations" },
+    ...(jokesOwner ? [{ key: "jokes" as Tab, label: "Jokes" }] : []),
+  ];
+
   return (
     <main className="min-h-screen pb-20">
       {/* Header */}
@@ -690,11 +702,7 @@ export default function DashboardPage() {
       {/* Tab navigation */}
       <nav className="max-w-2xl mx-auto px-6 mb-8">
         <div className="flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)] w-fit mx-auto">
-          {([
-            { key: "journal", label: "Journal" },
-            { key: "korean", label: "Korean" },
-            { key: "meditations", label: "Meditations" },
-          ] as const).map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -713,6 +721,8 @@ export default function DashboardPage() {
       <div className="max-w-2xl mx-auto px-6 space-y-10">
 
         {tab === "meditations" && <MeditationsTab />}
+
+        {tab === "jokes" && jokesOwner && user && <JokesTab userId={user.id} />}
 
         {tab === "korean" && (
           <div className="space-y-8">
