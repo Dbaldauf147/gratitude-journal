@@ -81,6 +81,11 @@ create unique index if not exists idx_jokes_user_uid on public.jokes(user_id, ui
 
 alter table public.jokes enable row level security;
 
+-- Required: this database's default privileges give anon/authenticated only
+-- Dxtm on new tables, so without this the app gets "permission denied for
+-- table jokes" despite correct RLS. See scripts/create-jokes-table.sql.
+grant select, insert, update, delete on table public.jokes to authenticated;
+
 create policy "Users can view their own jokes"
   on public.jokes for select using (auth.uid() = user_id);
 

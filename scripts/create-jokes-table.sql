@@ -26,6 +26,18 @@ create unique index if not exists idx_jokes_user_uid on public.jokes(user_id, ui
 
 alter table public.jokes enable row level security;
 
+-- Not optional here, and not the usual Supabase boilerplate.
+--
+-- This database has a default-privileges rule that hands anon and authenticated
+-- only Dxtm (references/trigger/truncate) on new tables, so a table created
+-- without this grant is invisible to the app: PostgREST reports "permission
+-- denied for table jokes" even though RLS is set up correctly. gratitude_entries
+-- predates that rule and has grants; anything newer has to ask.
+--
+-- anon is deliberately left out — the dashboard is behind auth, and RLS still
+-- scopes every row to its owner.
+grant select, insert, update, delete on table public.jokes to authenticated;
+
 drop policy if exists "Users can view their own jokes" on public.jokes;
 create policy "Users can view their own jokes"
   on public.jokes for select using (auth.uid() = user_id);
