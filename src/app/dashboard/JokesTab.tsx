@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { parseICS, icsDate } from "@/lib/ics";
+import { looksLikeZip, readZip, calendarNameFromFile } from "@/lib/zip";
 
 type Rating = "sfw" | "nsfw";
 type Filter = "all" | Rating | "unrated";
@@ -21,6 +22,28 @@ interface Joke {
 const dedupeKey = (j: { uid?: string | null; text: string }) =>
   j.uid ? `uid:${j.uid}` : `text:${j.text.trim().toLowerCase()}`;
 
+/** The table hasn't been created yet — a setup step, not a network problem. */
+const isMissingTable = (error: { code?: string; message?: string }) =>
+  error.code === "PGRST205" ||
+  (error.message || "").includes("Could not find the table") ||
+  (error.message || "").includes("does not exist");
+
+/**
+ * Why an import stopped, in words.
+ *
+ * Supabase throws a plain object rather than an Error, so the obvious
+ * String(err) renders "[object Object]" — the least useful thing a failure
+ * can say.
+ */
+function importProblem(err: unknown): string {
+  const e = (err || {}) as { code?: string; message?: string };
+  if (isMissingTable(e)) {
+    return "The jokes table isn't in Supabase yet — run the jokes block from supabase-schema.sql in the SQL Editor, then try again.";
+  }
+  const detail = e.message || (err instanceof Error ? err.message : "");
+  return detail ? `Import failed: ${detail}` : "Import failed. Check your connection and try again.";
+}
+
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "unrated", label: "To review" },
   { key: "sfw", label: "SFW" },
@@ -36,6 +59,8 @@ export default function JokesTab({ userId }: { userId: string }) {
   const [filter, setFilter] = useState<Filter>("unrated");
   const [importing, setImporting] = useState(false);
   const [note, setNote] = useState("");
+  // Set when an export holds several calendars and one has to be chosen.
+  const [choices, setChoices] = useState<{ label: string; text: string }[] | null>(null);
 
   const load = useCallback(async () => {
     const { data, error } = await supabase
@@ -46,9 +71,11 @@ export default function JokesTab({ userId }: { userId: string }) {
     if (error) {
       // Worth saying out loud: until the jokes table is created, this reads as
       // an empty collection rather than a setup step that hasn't happened.
+      // PostgREST reports a missing table as PGRST205 with "Could not find the
+      // table …in the schema cache" — not the "does not exist" Postgres wording.
       setNote(
-        error.message.includes("does not exist")
-          ? "The jokes table isn't in Supabase yet — run the jokes block from supabase-schema.sql in the SQL Editor."
+        isMissingTable(error)
+          ? "The jokes table isn't in Supabase yet — run the jokes block from supabase-schema.sql in the SQL Editor, then reload."
           : "Couldn't load your jokes. Check your connection."
       );
     } else {
@@ -95,11 +122,9 @@ export default function JokesTab({ userId }: { userId: string }) {
     }
   }
 
-  async function importFile(file: File) {
-    setImporting(true);
-    setNote("");
-    try {
-      const events = parseICS(await file.text());
+  /** Import one calendar's worth of text. Throws so the caller can report why. */
+  async function importText(text: string) {
+      const events = parseICS(text);
 
       const have = new Set(jokes.map(dedupeKey));
       const rows: {
@@ -128,7 +153,7 @@ export default function JokesTab({ userId }: { userId: string }) {
       }
 
       if (!events.length) {
-        setNote("No calendar events in that file — is it the .ics from the export?");
+        setNote("That calendar opened, but there are no events in it.");
       } else if (!rows.length) {
         setNote(`Nothing new — all ${events.length} of those are already here.`);
       } else {
@@ -151,8 +176,70 @@ export default function JokesTab({ userId }: { userId: string }) {
           `Imported ${rows.length} ${rows.length === 1 ? "joke" : "jokes"} — rate them below.`
         );
       }
+  }
+
+  /**
+   * Take whatever they picked.
+   *
+   * Google Calendar's export downloads as a .zip, so the old instruction to
+   * unzip it first was asking for a step the browser can do itself — and when
+   * the zip went in anyway, it was read as text, parsed to nothing, and
+   * reported through a catch-all that couldn't say which part had failed. Each
+   * stage now fails with its own message, and an unexpected one carries the
+   * real error rather than a guess at it.
+   */
+  async function importFile(file: File) {
+    setImporting(true);
+    setNote("");
+    setChoices(null);
+
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
     } catch {
-      setNote("Couldn't read that file. It should be a .ics from Google Calendar's export.");
+      setNote(
+        `Couldn't read ${file.name} off disk. If it lives in OneDrive or another cloud folder, open it once so it downloads properly, then try again.`
+      );
+      setImporting(false);
+      return;
+    }
+
+    try {
+      if (looksLikeZip(bytes)) {
+        const entries = await readZip(bytes, (n) => n.toLowerCase().endsWith(".ics"));
+        if (!entries.length) {
+          setNote("That zip opened, but there's no .ics calendar inside it.");
+        } else if (entries.length === 1) {
+          await importText(new TextDecoder().decode(entries[0].bytes));
+        } else {
+          // An "export all" zip holds every calendar you own. Importing the lot
+          // would bury the jokes under dentist appointments, so ask.
+          setChoices(
+            entries.map((e) => ({
+              label: calendarNameFromFile(e.name),
+              text: new TextDecoder().decode(e.bytes),
+            }))
+          );
+          setNote(
+            `That export has ${entries.length} calendars in it — pick the one with your jokes.`
+          );
+        }
+      } else {
+        await importText(new TextDecoder().decode(bytes));
+      }
+    } catch (err) {
+      setNote(importProblem(err));
+    }
+    setImporting(false);
+  }
+
+  async function importChoice(choice: { label: string; text: string }) {
+    setImporting(true);
+    setChoices(null);
+    try {
+      await importText(choice.text);
+    } catch (err) {
+      setNote(importProblem(err));
     }
     setImporting(false);
   }
@@ -306,15 +393,16 @@ export default function JokesTab({ userId }: { userId: string }) {
           Import from Calendar
         </p>
         <p className="text-[13px] text-[var(--text-muted)] leading-relaxed mb-4">
-          In Google Calendar: Settings → Import &amp; export → Export. Unzip what it
-          downloads and pick the <code className="text-[var(--text)]">.ics</code> for
-          your joke calendar. Importing the same file twice is safe — anything
+          In Google Calendar: Settings → Import &amp; export → Export. Give it the{" "}
+          <code className="text-[var(--text)]">.zip</code> exactly as it downloads —
+          no need to unzip it — or an <code className="text-[var(--text)]">.ics</code>{" "}
+          if you already have one. Importing the same file twice is safe; anything
           already here is skipped.
         </p>
         <label className="inline-block">
           <input
             type="file"
-            accept=".ics,text/calendar"
+            accept=".ics,.zip,text/calendar,application/zip"
             className="sr-only"
             disabled={importing}
             onChange={(e) => {
@@ -328,10 +416,25 @@ export default function JokesTab({ userId }: { userId: string }) {
               importing ? "opacity-50" : "hover:bg-[var(--accent-hover)] cursor-pointer"
             }`}
           >
-            {importing ? "Importing…" : "Choose .ics file"}
+            {importing ? "Importing…" : "Choose .zip or .ics"}
           </span>
         </label>
         {note && <p className="mt-4 text-[13px] text-[var(--text)]">{note}</p>}
+        {choices && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {choices.map((c, i) => (
+              <button
+                key={i}
+                type="button"
+                disabled={importing}
+                onClick={() => importChoice(c)}
+                className="px-4 py-2 rounded-full border border-[var(--border)] text-[13px] text-[var(--text)] hover:border-[var(--accent)] disabled:opacity-50"
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
