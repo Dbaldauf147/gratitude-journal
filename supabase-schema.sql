@@ -97,3 +97,35 @@ create policy "Users can update their own jokes"
 
 create policy "Users can delete their own jokes"
   on public.jokes for delete using (auth.uid() = user_id);
+
+-- Affirmations (the daily-view card; same shape as quotes, minus the author).
+-- This table was missing for a long time while the code queried it, so the
+-- feature silently saved nothing. See scripts/repair-quotes-and-affirmations.sql.
+create table if not exists public.affirmations (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  text text not null,
+  approved boolean default false not null,
+  dismissed boolean default false not null,
+  shown_at timestamptz default now() not null,
+  created_at timestamptz default now() not null
+);
+
+create index if not exists idx_affirmations_user_id on public.affirmations(user_id);
+create index if not exists idx_affirmations_shown_at on public.affirmations(user_id, shown_at desc);
+
+alter table public.affirmations enable row level security;
+
+-- Required on this database: default privileges give anon/authenticated only
+-- Dxtm on new tables, so without this the app gets "permission denied".
+grant select, insert, update, delete on table public.affirmations to authenticated;
+grant select, insert, update, delete on table public.quotes to authenticated;
+
+create policy "Users can view their own affirmations"
+  on public.affirmations for select using (auth.uid() = user_id);
+create policy "Users can insert their own affirmations"
+  on public.affirmations for insert with check (auth.uid() = user_id);
+create policy "Users can update their own affirmations"
+  on public.affirmations for update using (auth.uid() = user_id);
+create policy "Users can delete their own affirmations"
+  on public.affirmations for delete using (auth.uid() = user_id);

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import MeditationsTab from "./MeditationsTab";
 import JokesTab from "./JokesTab";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
-import { ownsJokes } from "@/lib/roles";
+import { ownsJokes, seesDailyJoke } from "@/lib/roles";
 
 type Tab = "journal" | "korean" | "meditations" | "jokes";
 
@@ -311,6 +311,10 @@ export default function DashboardPage() {
 
   const [tab, setTab] = useState<Tab>("journal");
 
+  // One SFW joke a day, for the accounts that get one. Fetched from the server
+  // because the jokes belong to another account and RLS won't hand them over.
+  const [dailyJoke, setDailyJoke] = useState<{ text: string; punchline: string | null } | null>(null);
+
   // Affirmation state
   const [todayAffirmation, setTodayAffirmation] = useState<string>("");
   const [affirmationStatus, setAffirmationStatus] = useState<"pending" | "approved" | "dismissed">("pending");
@@ -446,6 +450,17 @@ export default function DashboardPage() {
   useEffect(() => {
     if (user) loadQuotes();
   }, [user, loadQuotes]);
+
+  useEffect(() => {
+    if (!user || !seesDailyJoke(user.email)) return;
+    let live = true;
+    // Pass our local day so the joke turns over at the reader's midnight.
+    fetch(`/api/joke/today?date=${todayKey}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d?.joke) setDailyJoke(d.joke); })
+      .catch(() => { /* a missing joke is not worth an error in the daily view */ });
+    return () => { live = false; };
+  }, [user, todayKey]);
 
   async function handleQuote(approve: boolean) {
     if (!user || !quote) return;
@@ -955,6 +970,24 @@ export default function DashboardPage() {
         )}
 
         </div>
+
+        {/* Today's Joke — only ever one that's been rated SFW, and only for the
+            accounts set up to receive one. */}
+        {dailyJoke && (
+          <section className="bg-[var(--pastel-sky)] rounded-2xl p-5 text-center">
+            <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
+              Today&apos;s Joke
+            </p>
+            <p className="text-sm font-light text-[var(--text)] leading-relaxed whitespace-pre-wrap">
+              {dailyJoke.text}
+            </p>
+            {dailyJoke.punchline && (
+              <p className="text-sm font-light text-[var(--text)] leading-relaxed whitespace-pre-wrap mt-2">
+                {dailyJoke.punchline}
+              </p>
+            )}
+          </section>
+        )}
 
         {/* On this day — a month ago and a year ago, side by side */}
         {(throwbacks.monthAgo || throwbacks.yearAgo) && (
