@@ -1374,13 +1374,21 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Approved Affirmations */}
-        {approvedAffirmations.length > 0 && (
-          <section className="space-y-3">
-            <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
-              Your Affirmations
-            </h3>
-            <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+        {/* Approved Affirmations — always rendered. Hiding the section when it
+            was empty meant there was nothing on the page to tell you where kept
+            affirmations end up, so "none saved" and "feature missing" looked
+            identical. */}
+        <section className="space-y-3">
+          <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
+            Your Affirmations
+          </h3>
+          <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+            {approvedAffirmations.length === 0 ? (
+              <p className="text-sm text-[var(--text-muted)] leading-relaxed">
+                Nothing kept yet. Press <span className="text-[var(--text)]">Keep in Rotation</span> on
+                today&apos;s affirmation and it&apos;ll be here.
+              </p>
+            ) : (
               <div className="space-y-3">
                 {approvedAffirmations.map((a) => (
                   <div key={a.id} className="flex items-start gap-3 group">
@@ -1404,17 +1412,22 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
-            </div>
-          </section>
-        )}
+            )}
+          </div>
+        </section>
 
-        {/* Approved Quotes */}
-        {approvedQuotes.length > 0 && (
-          <section className="space-y-3">
-            <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
-              Your Quotes
-            </h3>
-            <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+        {/* Approved Quotes — always rendered, same reasoning as above. */}
+        <section className="space-y-3">
+          <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
+            Your Quotes
+          </h3>
+          <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+            {approvedQuotes.length === 0 ? (
+              <p className="text-sm text-[var(--text-muted)] leading-relaxed">
+                Nothing kept yet. Press <span className="text-[var(--text)]">Keep in Rotation</span> on
+                today&apos;s quote and it&apos;ll be here.
+              </p>
+            ) : (
               <div className="space-y-4">
                 {approvedQuotes.map((q) => (
                   <div key={q.id} className="flex items-start gap-3 group">
@@ -1444,9 +1457,9 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
-            </div>
-          </section>
-        )}
+            )}
+          </div>
+        </section>
 
         {/* Past Entries */}
         {entries.length > 0 && (
