@@ -7,6 +7,7 @@ import MeditationsTab from "./MeditationsTab";
 import JokesTab from "./JokesTab";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
 import { ownsJokes, seesDailyJoke } from "@/lib/roles";
+import { pickPopularQuote } from "@/lib/popularQuotes";
 
 type Tab = "journal" | "korean" | "meditations" | "jokes";
 
@@ -293,10 +294,14 @@ export default function DashboardPage() {
   const [quote, setQuote] = useState<{ quote: string; author: string } | null>(null);
   const [quoteStatus, setQuoteStatus] = useState<"pending" | "approved" | "dismissed">("pending");
   const [approvedQuotes, setApprovedQuotes] = useState<SavedQuote[]>([]);
+  // Every quote text this user has already ruled on, kept or removed. Drives
+  // the popular-quote fallback so it never re-offers one they've seen.
+  const [seenQuotes, setSeenQuotes] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit1, setEdit1] = useState("");
   const [edit2, setEdit2] = useState("");
   const [edit3, setEdit3] = useState("");
+  const [editDate, setEditDate] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [pastDate, setPastDate] = useState("");
   const [past1, setPast1] = useState("");
@@ -372,8 +377,21 @@ export default function DashboardPage() {
       .select("*")
       .order("shown_at", { ascending: false });
 
-    const all = data || [];
-    setApprovedAffirmations(all.filter((a) => a.approved && !a.dismissed));
+    const all: Affirmation[] = data || [];
+
+    // Rows are one-per-day, so the same text piles up with conflicting
+    // verdicts. Only the newest row for a text counts — otherwise a months-old
+    // approval outvotes today's dismissal and the line can never be retired.
+    // `all` is already newest-first, so the first row for a text wins.
+    const latestByText = new Map<string, Affirmation>();
+    for (const a of all) {
+      if (!latestByText.has(a.text)) latestByText.set(a.text, a);
+    }
+    const standing = Array.from(latestByText.values());
+    const approved = standing.filter((a) => a.approved && !a.dismissed);
+    const dismissed = new Set(standing.filter((a) => a.dismissed).map((a) => a.text));
+
+    setApprovedAffirmations(approved);
 
     if (toLocalDateStr(new Date()) === "2026-05-24") {
       setTodayAffirmation("Joanne is very very very cool. Like super cool.");
@@ -388,19 +406,28 @@ export default function DashboardPage() {
       setTodayAffirmation(todayAff.text);
       setAffirmationStatus(todayAff.approved ? "approved" : todayAff.dismissed ? "dismissed" : "pending");
     } else {
-      // Pick a new affirmation: prefer approved ones in rotation, otherwise use defaults
-      const approved = all.filter((a) => a.approved && !a.dismissed);
-      const dismissed = new Set(all.filter((a) => a.dismissed).map((a) => a.text));
-      const available = approved.length > 0
-        ? approved.map((a) => a.text)
-        : DEFAULT_AFFIRMATIONS.filter((a) => !dismissed.has(a));
+      // The pool is everything still in circulation: the built-in list plus
+      // anything approved, minus anything dismissed. Approving adds to the
+      // rotation — it must not *become* the rotation, which is what pinned a
+      // single affirmation in place for weeks.
+      const pool = Array.from(new Set([...DEFAULT_AFFIRMATIONS, ...approved.map((a) => a.text)]))
+        .filter((t) => !dismissed.has(t));
+      // If every one has been dismissed, start the defaults over rather than
+      // rendering no card at all.
+      const available = pool.length > 0 ? pool : [...DEFAULT_AFFIRMATIONS];
 
       if (available.length > 0) {
         // Pick based on day of year for consistency
         const dayOfYear = Math.floor(
           (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000
         );
-        const pick = available[dayOfYear % available.length];
+        let pick = available[dayOfYear % available.length];
+        // The pool shrinks and grows as things get approved/dismissed, so the
+        // day-of-year index can land back on the last one shown. Nudge off it.
+        const lastShown = all[0]?.text;
+        if (pick === lastShown && available.length > 1) {
+          pick = available[(dayOfYear + 1) % available.length];
+        }
         setTodayAffirmation(pick);
         setAffirmationStatus("pending");
       }
@@ -424,6 +451,19 @@ export default function DashboardPage() {
     }
   }, [user, loadEntries, loadAffirmations]);
 
+  // Serve the next quote from the standing popular-quote pool. Used whenever
+  // the calendar has nothing to offer for today — either it carries no quote
+  // for this date, or the user removed the one it does carry.
+  const showPopularQuote = useCallback((seen: Set<string>) => {
+    const pick = pickPopularQuote(todayKey, seen);
+    if (!pick) {
+      setQuote(null);
+      return;
+    }
+    setQuote({ quote: pick.text, author: pick.author });
+    setQuoteStatus("pending");
+  }, [todayKey]);
+
   const loadQuotes = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase
@@ -432,20 +472,31 @@ export default function DashboardPage() {
       .order("shown_at", { ascending: false });
     const all: SavedQuote[] = data || [];
     setApprovedQuotes(all.filter((q) => q.approved && !q.dismissed));
+    const seen = new Set(all.map((q) => q.text));
+    setSeenQuotes(seen);
 
-    const res = await fetch("/api/quote/today");
-    if (!res.ok) return;
-    const d = await res.json();
-    if (!d || !d.quote) return;
-
-    const existing = all.find((q) => q.text === d.quote);
-    if (existing) {
-      setQuoteStatus(existing.approved ? "approved" : existing.dismissed ? "dismissed" : "pending");
-    } else {
-      setQuoteStatus("pending");
+    let calendar: { quote: string; author: string } | null = null;
+    try {
+      const res = await fetch("/api/quote/today");
+      if (res.ok) {
+        const d = await res.json();
+        if (d?.quote) calendar = { quote: d.quote, author: d.author || "" };
+      }
+    } catch {
+      /* a dead feed is just another empty day — the pool below covers it */
     }
-    setQuote({ quote: d.quote, author: d.author || "" });
-  }, [supabase, user]);
+
+    // The calendar feed is one quote per calendar day, so every quote the user
+    // removes would otherwise leave that day permanently blank.
+    const existing = calendar ? all.find((q) => q.text === calendar!.quote) : null;
+    if (calendar && !existing?.dismissed) {
+      setQuote(calendar);
+      setQuoteStatus(existing?.approved ? "approved" : "pending");
+      return;
+    }
+
+    showPopularQuote(seen);
+  }, [supabase, user, showPopularQuote]);
 
   useEffect(() => {
     if (user) loadQuotes();
@@ -485,8 +536,11 @@ export default function DashboardPage() {
       });
     }
 
-    setQuoteStatus(approve ? "approved" : "dismissed");
+    const seen = new Set(seenQuotes).add(quote.quote);
+    setSeenQuotes(seen);
+
     if (approve) {
+      setQuoteStatus("approved");
       setApprovedQuotes((prev) => {
         if (prev.some((q) => q.text === quote.quote)) return prev;
         return [
@@ -496,6 +550,8 @@ export default function DashboardPage() {
       });
     } else {
       setApprovedQuotes((prev) => prev.filter((q) => q.text !== quote.quote));
+      // Removing one shouldn't cost them the day's quote — hand over the next.
+      showPopularQuote(seen);
     }
   }
 
@@ -574,14 +630,39 @@ export default function DashboardPage() {
     setEdit1(entry.grateful_1);
     setEdit2(entry.grateful_2);
     setEdit3(entry.grateful_3);
+    setEditDate(toLocalDateStr(new Date(entry.created_at)));
   }
 
   function cancelEditing() {
     setEditingId(null);
+    setEditDate("");
+  }
+
+  // Move an entry to another day but keep its original time of day, so a date
+  // change can't shunt the entry across a timezone boundary into the wrong day.
+  function withLocalDate(originalIso: string, localDate: string) {
+    const [y, m, d] = localDate.split("-").map(Number);
+    const next = new Date(originalIso);
+    next.setFullYear(y, m - 1, d);
+    return next.toISOString();
   }
 
   async function saveEdit(entryId: string) {
     if (!edit1.trim() || !edit2.trim() || !edit3.trim()) return;
+
+    const entry = entries.find((en) => en.id === entryId);
+    const originalDate = entry ? toLocalDateStr(new Date(entry.created_at)) : "";
+    const dateChanged = Boolean(entry && editDate && editDate !== originalDate);
+
+    // One entry per day — the same rule the past-entry form enforces.
+    if (
+      dateChanged &&
+      entries.some((en) => en.id !== entryId && toLocalDateStr(new Date(en.created_at)) === editDate)
+    ) {
+      alert("An entry already exists for that date.");
+      return;
+    }
+
     setEditSaving(true);
     const { error } = await supabase
       .from("gratitude_entries")
@@ -589,14 +670,18 @@ export default function DashboardPage() {
         grateful_1: edit1.trim(),
         grateful_2: edit2.trim(),
         grateful_3: edit3.trim(),
+        ...(dateChanged && entry ? { created_at: withLocalDate(entry.created_at, editDate) } : {}),
       })
       .eq("id", entryId);
 
     if (!error) {
       setEditingId(null);
+      setEditDate("");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       await loadEntries();
+    } else {
+      alert("Error saving: " + error.message);
     }
     setEditSaving(false);
   }
@@ -1447,7 +1532,9 @@ export default function DashboardPage() {
                           .update({ dismissed: true, approved: false })
                           .eq("id", q.id);
                         setApprovedQuotes((prev) => prev.filter((x) => x.id !== q.id));
-                        if (quote && quote.quote === q.text) setQuoteStatus("dismissed");
+                        const seen = new Set(seenQuotes).add(q.text);
+                        setSeenQuotes(seen);
+                        if (quote && quote.quote === q.text) showPopularQuote(seen);
                       }}
                       className="text-xs text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
                       title="Remove from rotation"
@@ -1489,6 +1576,21 @@ export default function DashboardPage() {
 
                 {editingId === entry.id ? (
                   <div className="space-y-3">
+                    <div>
+                      <span className="text-xs text-[var(--text-muted)] block mb-1">Date</span>
+                      <input
+                        type="date"
+                        value={editDate}
+                        onChange={(e) => setEditDate(e.target.value)}
+                        max={toLocalDateStr(new Date())}
+                        className="px-4 py-2.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors w-full"
+                      />
+                      {editDate &&
+                        editDate !== toLocalDateStr(new Date(entry.created_at)) &&
+                        entryDates.has(editDate) && (
+                          <p className="text-xs text-red-400 mt-1">An entry already exists for this date.</p>
+                        )}
+                    </div>
                     {[
                       { value: edit1, setter: setEdit1, idx: 0 },
                       { value: edit2, setter: setEdit2, idx: 1 },
@@ -1510,7 +1612,12 @@ export default function DashboardPage() {
                     <div className="flex gap-3 pt-2">
                       <button
                         onClick={() => saveEdit(entry.id)}
-                        disabled={editSaving}
+                        disabled={
+                          editSaving ||
+                          !editDate ||
+                          (editDate !== toLocalDateStr(new Date(entry.created_at)) &&
+                            entryDates.has(editDate))
+                        }
                         className="flex-1 py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
                       >
                         {editSaving ? "Saving..." : "Save Changes"}
