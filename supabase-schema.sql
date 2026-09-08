@@ -30,6 +30,12 @@ create policy "Users can delete their own entries"
   on gratitude_entries for delete
   using (auth.uid() = user_id);
 
+-- Editing an entry (text or its date) needs this; the live database has had it
+-- for a while, this file just never recorded it.
+create policy "Users can update their own entries"
+  on gratitude_entries for update
+  using (auth.uid() = user_id);
+
 -- Quotes (calendar-sourced; track which ones the user keeps vs dismisses)
 create table if not exists public.quotes (
   id uuid default gen_random_uuid() primary key,
