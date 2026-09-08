@@ -1,0 +1,16 @@
+[
+  "(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-16-pro-max.png",
+  "(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-16-pro.png",
+  "(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-15-plus.png",
+  "(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-15.png",
+  "(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-12-pro-max.png",
+  "(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-12-pro.png",
+  "(device-width: 360px) and (device-height: 780px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-13-mini.png",
+  "(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-11-pro-max.png",
+  "(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)|/splash/splash-iphone-11.png",
+  "(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-x.png",
+  "(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)|/splash/splash-iphone-8-plus.png",
+  "(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)|/splash/splash-iphone-8.png",
+  "(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)|/splash/splash-ipad-air.png",
+  "(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)|/splash/splash-ipad.png"
+]

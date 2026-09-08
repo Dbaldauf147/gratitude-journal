@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import InstallHint from "../InstallHint";
 import MeditationsTab from "./MeditationsTab";
 import JokesTab from "./JokesTab";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
@@ -10,6 +11,57 @@ import { ownsJokes, seesDailyJoke } from "@/lib/roles";
 import { pickPopularQuote } from "@/lib/popularQuotes";
 
 type Tab = "journal" | "korean" | "meditations" | "jokes";
+
+// Journal history kept on the device so an installed app opens with content on
+// the very first frame instead of an empty shell. Keyed per user — this is a
+// shared-device app and one account must never flash another's entries.
+const entriesCacheKey = (userId: string) => `gratitude:entries:v1:${userId}`;
+
+// Tab bar glyphs. Inline rather than an icon package: four icons doesn't earn a
+// dependency, and these need to match the hairline weight of the rest of the UI.
+function TabIcon({ tab, active }: { tab: Tab; active: boolean }) {
+  const common = {
+    width: 22,
+    height: 22,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: active ? 2 : 1.6,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+  switch (tab) {
+    case "journal":
+      return (
+        <svg {...common} aria-hidden="true">
+          <rect x="5" y="3" width="14" height="18" rx="2" />
+          <path d="M9 3v18M12 8.5h4M12 12.5h4" />
+        </svg>
+      );
+    case "korean":
+      return (
+        <svg {...common} aria-hidden="true">
+          <path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+        </svg>
+      );
+    case "meditations":
+      return (
+        <svg {...common} aria-hidden="true">
+          <circle cx="12" cy="12" r="2.5" />
+          <path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4" />
+          <path d="M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2" />
+        </svg>
+      );
+    case "jokes":
+      return (
+        <svg {...common} aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" />
+          <path d="M9 9.5h.01M15 9.5h.01" />
+        </svg>
+      );
+  }
+}
 
 interface GratitudeEntry {
   id: string;
@@ -435,21 +487,57 @@ export default function DashboardPage() {
   }, [supabase]);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) {
-        router.push("/login");
-      } else {
-        setUser(user);
+    let cancelled = false;
+    (async () => {
+      // getSession() reads the token straight out of local storage, so the app
+      // paints at once and still opens with no signal. getUser() is a network
+      // round trip on every launch — a blank first frame when it's slow, and an
+      // instant bounce to /login when there's no connection at all.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (session?.user) {
+        setUser(session.user);
+        return;
       }
-    });
+      // No stored session. That usually means signed out, but only act on it if
+      // we can actually reach the network to confirm.
+      const { data: { user: fetched } } = await supabase.auth.getUser();
+      if (cancelled) return;
+      if (fetched) setUser(fetched);
+      else if (navigator.onLine) router.push("/login");
+    })();
+    return () => { cancelled = true; };
   }, [supabase, router]);
 
   useEffect(() => {
-    if (user) {
-      loadEntries();
-      loadAffirmations();
+    if (!user) return;
+    // Show the cached journal first, then let the network replace it.
+    try {
+      const raw = localStorage.getItem(entriesCacheKey(user.id));
+      if (raw) {
+        const cached: GratitudeEntry[] = JSON.parse(raw);
+        if (Array.isArray(cached) && cached.length > 0) {
+          setEntries(cached);
+          setTodayEntry(cached.find((e) => isToday(e.created_at)) || null);
+        }
+      }
+    } catch {
+      /* corrupt or unavailable storage — skip the fast path, load normally */
     }
+    loadEntries();
+    loadAffirmations();
   }, [user, loadEntries, loadAffirmations]);
+
+  // Keep the offline copy in step with what's on screen. Capped, because the
+  // journal grows without limit and localStorage does not.
+  useEffect(() => {
+    if (!user || entries.length === 0) return;
+    try {
+      localStorage.setItem(entriesCacheKey(user.id), JSON.stringify(entries.slice(0, 60)));
+    } catch {
+      /* quota or private browsing — the cache is an optimisation, not a store */
+    }
+  }, [user, entries]);
 
   // Serve the next quote from the standing popular-quote pool. Used whenever
   // the calendar has nothing to offer for today — either it carries no quote
@@ -772,10 +860,109 @@ export default function DashboardPage() {
     ...(jokesOwner ? [{ key: "jokes" as Tab, label: "Jokes" }] : []),
   ];
 
+  // One calendar, rendered in two places: a fixed sidebar on wide screens and
+  // inline in the journal on phones, where there is no room for a sidebar. It's
+  // sized for a phone first and squeezed back down at lg, where the same card
+  // has to fit a 208px column.
+  const calendarCard = (
+      <div className="bg-[var(--surface)] rounded-2xl lg:rounded-xl p-4 lg:p-3 shadow-sm border border-[var(--border)]">
+        <div className="flex items-center justify-between mb-2">
+          <button
+            onClick={() => setCalendarMonth(prev => {
+              const d = new Date(prev.year, prev.month - 1, 1);
+              return { year: d.getFullYear(), month: d.getMonth() };
+            })}
+            className="w-8 h-8 lg:w-6 lg:h-6 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)] transition-colors text-base lg:text-xs"
+          >
+            ‹
+          </button>
+          <h3 className="text-sm lg:text-[11px] font-medium text-[var(--text)]">
+            {new Date(calendarMonth.year, calendarMonth.month).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+          </h3>
+          <button
+            onClick={() => {
+              const now = new Date();
+              if (calendarMonth.year < now.getFullYear() || (calendarMonth.year === now.getFullYear() && calendarMonth.month < now.getMonth())) {
+                setCalendarMonth(prev => {
+                  const d = new Date(prev.year, prev.month + 1, 1);
+                  return { year: d.getFullYear(), month: d.getMonth() };
+                });
+              }
+            }}
+            className="w-8 h-8 lg:w-6 lg:h-6 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)] transition-colors text-base lg:text-xs"
+          >
+            ›
+          </button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 lg:gap-px text-center">
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+            <div key={i} className="text-[10px] lg:text-[8px] text-[var(--text-muted)] font-medium py-0.5">{d}</div>
+          ))}
+          {(() => {
+            const firstDay = new Date(calendarMonth.year, calendarMonth.month, 1).getDay();
+            const daysInMonth = new Date(calendarMonth.year, calendarMonth.month + 1, 0).getDate();
+            const today = new Date();
+            const todayStr2 = toLocalDateStr(today);
+            const entryDateSet = new Set(entries.map(e => toLocalDateStr(new Date(e.created_at))));
+            const cells = [];
+            for (let i = 0; i < firstDay; i++) cells.push(<div key={`blank-${i}`} />);
+            for (let day = 1; day <= daysInMonth; day++) {
+              const dateStr = `${calendarMonth.year}-${String(calendarMonth.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const hasEntry = entryDateSet.has(dateStr);
+              const isDayToday = dateStr === todayStr2;
+              const isFuture = new Date(dateStr) > today;
+              const entry = hasEntry ? entries.find(e => toLocalDateStr(new Date(e.created_at)) === dateStr) : null;
+              cells.push(
+                <button
+                  key={day}
+                  disabled={isFuture}
+                  onClick={() => {
+                    if (entry) {
+                      startEditing(entry);
+                      const el = document.getElementById(`entry-${entry.id}`);
+                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    } else if (!isFuture) {
+                      setPastDate(dateStr);
+                      setShowPastEntry(true);
+                      setPast1(''); setPast2(''); setPast3('');
+                      setTimeout(() => {
+                        const el = document.getElementById('past-entry-form');
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }, 100);
+                    }
+                  }}
+                  className={`relative w-full aspect-square rounded-lg lg:rounded flex items-center justify-center transition-all ${
+                    isFuture ? 'text-[var(--text-muted)] opacity-25 cursor-default text-[13px] lg:text-[9px]' :
+                    isDayToday ? 'font-bold ring-1.5 ring-[var(--accent)] text-[var(--accent)] text-[14px] lg:text-[10px]' :
+                    hasEntry ? 'cursor-pointer hover:opacity-80 text-[14px] lg:text-[10px]' :
+                    'cursor-pointer hover:bg-[var(--bg)] text-[var(--text-muted)] text-[13px] lg:text-[9px]'
+                  }`}
+                  style={hasEntry ? { backgroundColor: 'var(--pastel-sage)' } : undefined}
+                >
+                  {day}
+                </button>
+              );
+            }
+            return cells;
+          })()}
+        </div>
+        <div className="flex items-center gap-3 lg:gap-2 mt-3 lg:mt-2 pt-2 border-t border-[var(--border)]">
+          <span className="flex items-center gap-1 text-[10px] lg:text-[8px] text-[var(--text-muted)]">
+            <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: 'var(--pastel-sage)' }} /> Logged
+          </span>
+          <span className="flex items-center gap-1 text-[10px] lg:text-[8px] text-[var(--text-muted)]">
+            <span className="w-2 h-2 rounded-sm ring-1 ring-[var(--accent)]" /> Today
+          </span>
+        </div>
+      </div>
+  );
+
   return (
-    <main className="min-h-screen pb-20">
-      {/* Header */}
-      <header className="flex items-center justify-between px-6 py-5 max-w-2xl mx-auto">
+    <main className="min-h-screen pb-tabbar md:pb-20">
+      {/* Header — sticky, so the streak and sign-out stay reachable without
+          scrolling back up, and inset past the notch in standalone mode. */}
+      <header className="sticky top-0 z-30 bg-[var(--bg-frosted)] backdrop-blur-md pt-safe">
+        <div className="flex items-center justify-between px-6 py-4 max-w-2xl mx-auto">
         <div>
           <p className="text-sm text-[var(--text-muted)]">
             {greeting}{name ? `, ${name}` : ""}
@@ -797,10 +984,13 @@ export default function DashboardPage() {
             Sign out
           </button>
         </div>
+        </div>
       </header>
 
-      {/* Tab navigation */}
-      <nav className="max-w-2xl mx-auto px-6 mb-8">
+      {/* Tab navigation. Two presentations of the same state: a pill row on
+          desktop, and on phones a bottom bar, because the top of a tall screen
+          is the one place a thumb can't comfortably reach. */}
+      <nav className="hidden md:block max-w-2xl mx-auto px-6 mb-8">
         <div className="flex gap-1 p-1 bg-[var(--surface)] rounded-full border border-[var(--border)] w-fit mx-auto">
           {tabs.map((t) => (
             <button
@@ -815,6 +1005,40 @@ export default function DashboardPage() {
               {t.label}
             </button>
           ))}
+        </div>
+      </nav>
+
+      <InstallHint />
+
+      <nav
+        aria-label="Sections"
+        className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-[var(--border)] bg-[var(--surface-frosted)] backdrop-blur-md pb-safe"
+      >
+        <div
+          className="flex items-stretch justify-around px-1 pt-1.5"
+          style={{ minHeight: "var(--tabbar-height)" }}
+        >
+          {tabs.map((t) => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => {
+                  setTab(t.key);
+                  // Switching tabs should land at the top of the new one, the
+                  // way a native tab bar behaves.
+                  window.scrollTo({ top: 0 });
+                }}
+                aria-current={active ? "page" : undefined}
+                className={`tap-scale flex-1 flex flex-col items-center gap-1 pt-1 pb-1 rounded-xl ${
+                  active ? "text-[var(--accent)]" : "text-[var(--text-muted)]"
+                }`}
+              >
+                <TabIcon tab={t.key} active={active} />
+                <span className="text-[10px] leading-none">{t.label}</span>
+              </button>
+            );
+          })}
         </div>
       </nav>
 
@@ -1454,7 +1678,7 @@ export default function DashboardPage() {
         )}
 
         {saved && (
-          <div className="fixed bottom-6 right-6 bg-[var(--pastel-sage)] text-[var(--text)] text-sm px-5 py-2.5 rounded-full shadow-md">
+          <div className="fixed right-6 bottom-[calc(var(--tabbar-height)+var(--safe-bottom)+1rem)] md:bottom-6 bg-[var(--pastel-sage)] text-[var(--text)] text-sm px-5 py-2.5 rounded-full shadow-md">
             Saved
           </div>
         )}
@@ -1547,6 +1771,11 @@ export default function DashboardPage() {
             )}
           </div>
         </section>
+
+        {/* Month at a glance. The desktop build parks this in a fixed sidebar,
+            which is hidden below lg — so on a phone the same card goes inline,
+            right above the history it indexes into. */}
+        <div className="lg:hidden">{calendarCard}</div>
 
         {/* Past Entries */}
         {entries.length > 0 && (
@@ -1655,99 +1884,11 @@ export default function DashboardPage() {
         </>}
       </div>
 
-      {/* Calendar — fixed right sidebar (Journal tab only) */}
-      {tab === "journal" && <div className="fixed top-24 right-6 w-52 hidden lg:block">
-        <div className="bg-[var(--surface)] rounded-xl p-3 shadow-sm border border-[var(--border)]">
-          <div className="flex items-center justify-between mb-2">
-            <button
-              onClick={() => setCalendarMonth(prev => {
-                const d = new Date(prev.year, prev.month - 1, 1);
-                return { year: d.getFullYear(), month: d.getMonth() };
-              })}
-              className="w-6 h-6 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)] transition-colors text-xs"
-            >
-              ‹
-            </button>
-            <h3 className="text-[11px] font-medium text-[var(--text)]">
-              {new Date(calendarMonth.year, calendarMonth.month).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-            </h3>
-            <button
-              onClick={() => {
-                const now = new Date();
-                if (calendarMonth.year < now.getFullYear() || (calendarMonth.year === now.getFullYear() && calendarMonth.month < now.getMonth())) {
-                  setCalendarMonth(prev => {
-                    const d = new Date(prev.year, prev.month + 1, 1);
-                    return { year: d.getFullYear(), month: d.getMonth() };
-                  });
-                }
-              }}
-              className="w-6 h-6 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)] transition-colors text-xs"
-            >
-              ›
-            </button>
-          </div>
-          <div className="grid grid-cols-7 gap-px text-center">
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-              <div key={i} className="text-[8px] text-[var(--text-muted)] font-medium py-0.5">{d}</div>
-            ))}
-            {(() => {
-              const firstDay = new Date(calendarMonth.year, calendarMonth.month, 1).getDay();
-              const daysInMonth = new Date(calendarMonth.year, calendarMonth.month + 1, 0).getDate();
-              const today = new Date();
-              const todayStr2 = toLocalDateStr(today);
-              const entryDateSet = new Set(entries.map(e => toLocalDateStr(new Date(e.created_at))));
-              const cells = [];
-              for (let i = 0; i < firstDay; i++) cells.push(<div key={`blank-${i}`} />);
-              for (let day = 1; day <= daysInMonth; day++) {
-                const dateStr = `${calendarMonth.year}-${String(calendarMonth.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const hasEntry = entryDateSet.has(dateStr);
-                const isDayToday = dateStr === todayStr2;
-                const isFuture = new Date(dateStr) > today;
-                const entry = hasEntry ? entries.find(e => toLocalDateStr(new Date(e.created_at)) === dateStr) : null;
-                cells.push(
-                  <button
-                    key={day}
-                    disabled={isFuture}
-                    onClick={() => {
-                      if (entry) {
-                        startEditing(entry);
-                        const el = document.getElementById(`entry-${entry.id}`);
-                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      } else if (!isFuture) {
-                        setPastDate(dateStr);
-                        setShowPastEntry(true);
-                        setPast1(''); setPast2(''); setPast3('');
-                        setTimeout(() => {
-                          const el = document.getElementById('past-entry-form');
-                          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }, 100);
-                      }
-                    }}
-                    className={`relative w-full aspect-square rounded flex items-center justify-center transition-all ${
-                      isFuture ? 'text-[var(--text-muted)] opacity-25 cursor-default text-[9px]' :
-                      isDayToday ? 'font-bold ring-1.5 ring-[var(--accent)] text-[var(--accent)] text-[10px]' :
-                      hasEntry ? 'cursor-pointer hover:opacity-80 text-[10px]' :
-                      'cursor-pointer hover:bg-[var(--bg)] text-[var(--text-muted)] text-[9px]'
-                    }`}
-                    style={hasEntry ? { backgroundColor: 'var(--pastel-sage)' } : undefined}
-                  >
-                    {day}
-                  </button>
-                );
-              }
-              return cells;
-            })()}
-          </div>
-          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[var(--border)]">
-            <span className="flex items-center gap-1 text-[8px] text-[var(--text-muted)]">
-              <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: 'var(--pastel-sage)' }} /> Logged
-            </span>
-            <span className="flex items-center gap-1 text-[8px] text-[var(--text-muted)]">
-              <span className="w-2 h-2 rounded-sm ring-1 ring-[var(--accent)]" /> Today
-            </span>
-          </div>
-        </div>
-      </div>}
+      {/* Calendar — fixed right sidebar on desktop; the phone build renders
+          the same card inline inside the journal tab. */}
+      {tab === "journal" && (
+        <div className="fixed top-24 right-6 w-52 hidden lg:block">{calendarCard}</div>
+      )}
     </main>
   );
 }

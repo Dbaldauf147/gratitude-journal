@@ -15,6 +15,31 @@
   --pastel-sage: #e0ebe4;
   --pastel-amber: #f5ecd9;
   --pastel-sky: #dde8f0;
+
+  /* Notch and home-indicator insets. Real values only once the viewport is
+     `viewport-fit=cover`; 0px everywhere else, so these are safe to use
+     unconditionally. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Frosted variants of the two ground colours. Written out as rgba because
+     Tailwind cannot apply an opacity modifier (bg-[var(--surface)]/95) to an
+     arbitrary CSS variable — it silently drops the whole background, which
+     leaves the tab bar and header transparent. */
+  --surface-frosted: rgba(255, 255, 255, 0.94);
+  --bg-frosted: rgba(250, 248, 245, 0.88);
+
+  /* Height of the mobile tab bar, so content can reserve room for it in one place. */
+  --tabbar-height: 4.25rem;
+}
+
+html {
+  /* Stops iOS inflating type in landscape, which breaks the measured layout. */
+  -webkit-text-size-adjust: 100%;
+  /* Paint the safe areas in the app colour rather than letting the browser pick. */
+  background: var(--bg);
 }
 
 body {
@@ -22,4 +47,59 @@ body {
   background: var(--bg);
   font-family: 'Georgia', 'Times New Roman', serif;
   -webkit-font-smoothing: antialiased;
+  /* Grey flash on every tap is the single most website-like tell on iOS. */
+  -webkit-tap-highlight-color: transparent;
+  /* Kills the rubber-band overscroll past the top and bottom of the document,
+     which in standalone mode exposes a blank strip and reads as a web page. */
+  overscroll-behavior-y: none;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+/* Long-pressing a button on iOS otherwise selects its label or pops the
+   share/lookup callout. Real apps don't do that. Journal text is untouched and
+   stays selectable. */
+button,
+nav,
+[role="tab"] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* iOS zooms the viewport whenever a focused field's text is under 16px, and
+   never zooms back out. Setting the floor is the fix; disabling user scaling
+   would work too but takes pinch-zoom away from everyone. */
+input,
+textarea,
+select {
+  font-size: max(16px, 1rem);
+}
+
+@layer utilities {
+  /* Content padding that clears the home indicator, plus the tab bar when one
+     is present. */
+  .pb-safe {
+    padding-bottom: var(--safe-bottom);
+  }
+  .pt-safe {
+    padding-top: var(--safe-top);
+  }
+  .pb-tabbar {
+    padding-bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 1rem);
+  }
+
+  /* Momentum scrolling inside a pane, the way a native scroll view behaves. */
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Press feedback for tap targets — a real app acknowledges the touch. */
+  .tap-scale {
+    transition: transform 120ms ease, opacity 120ms ease;
+  }
+  .tap-scale:active {
+    transform: scale(0.96);
+    opacity: 0.85;
+  }
 }
