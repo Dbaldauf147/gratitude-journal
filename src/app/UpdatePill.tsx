@@ -40,7 +40,9 @@ export default function UpdatePill() {
   if (!updateReady) return null;
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-[var(--surface)] border border-[var(--border)] shadow-md rounded-full pl-4 pr-2 py-2">
+    // Lifted clear of the mobile tab bar. It has to stay at the bottom — the top
+    // of a phone screen is out of thumb reach.
+    <div className="fixed bottom-[calc(var(--tabbar-height)+var(--safe-bottom)+1rem)] md:bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-[var(--surface)] border border-[var(--border)] shadow-md rounded-full pl-4 pr-2 py-2">
       <span className="text-sm text-[var(--text)]">A new version is available</span>
       <button
         onClick={() => window.location.reload()}
