@@ -9,6 +9,7 @@ import JokesTab from "./JokesTab";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
 import { ownsJokes, seesDailyJoke } from "@/lib/roles";
 import { pickPopularQuote } from "@/lib/popularQuotes";
+import { pickAffirmation } from "@/lib/affirmations";
 
 type Tab = "journal" | "korean" | "meditations" | "jokes";
 
@@ -131,29 +132,6 @@ const PLACEHOLDERS = [
   "A simple pleasure you enjoyed...",
 ];
 
-const DEFAULT_AFFIRMATIONS = [
-  "I am worthy of love, happiness, and fulfillment.",
-  "I choose to focus on what I can control and let go of the rest.",
-  "I am growing stronger and more resilient every day.",
-  "I am grateful for the abundance that flows into my life.",
-  "I trust the timing of my journey.",
-  "I am enough, just as I am.",
-  "I attract positivity and release negativity.",
-  "My challenges are opportunities for growth.",
-  "I am surrounded by love and support.",
-  "I choose peace over worry.",
-  "I am capable of achieving anything I set my mind to.",
-  "I honor my body and treat it with kindness.",
-  "Every day is a fresh start full of possibilities.",
-  "I radiate confidence, warmth, and compassion.",
-  "I am deserving of rest and self-care.",
-  "I celebrate my progress, no matter how small.",
-  "I release comparison and embrace my unique path.",
-  "I am a positive force in the lives of those around me.",
-  "My potential is limitless.",
-  "I welcome joy into every moment of today.",
-];
-
 function toLocalDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -206,7 +184,30 @@ export default function DashboardPage() {
   const [phraseLoading, setPhraseLoading] = useState(false);
   const [phraseError, setPhraseError] = useState("");
 
-  const todayKey = toLocalDateStr(new Date());
+  // The local day, kept live. This used to be computed once per render, which
+  // in practice meant once when the dashboard mounted — and an installed PWA or
+  // a phone tab is never remounted. The daily cards then sat on whatever was
+  // picked the evening the app was first opened, for as long as the app stayed
+  // resident: the same affirmation, quote, joke and Korean word every day.
+  const [todayKey, setTodayKey] = useState(() => toLocalDateStr(new Date()));
+
+  useEffect(() => {
+    const check = () =>
+      setTodayKey((prev) => {
+        const now = toLocalDateStr(new Date());
+        return now === prev ? prev : now;
+      });
+    // Both halves matter: the timer catches midnight while the app is open, and
+    // the events catch a phone that was asleep across it.
+    const timer = setInterval(check, 60_000);
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+    };
+  }, []);
 
   async function submitPhrase(e: React.FormEvent) {
     e.preventDefault();
@@ -420,7 +421,10 @@ export default function DashboardPage() {
       ]);
       setThrowbacks({ monthAgo: monthAgoEntry, yearAgo: yearAgoEntry });
     }
-  }, [supabase]);
+    // todayKey isn't read here, but isToday() and the throwback offsets all
+    // resolve against the local day, so this has to re-run when it rolls over.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, todayKey]);
 
   const loadAffirmations = useCallback(async () => {
     // Load all user's affirmations
@@ -445,7 +449,7 @@ export default function DashboardPage() {
 
     setApprovedAffirmations(approved);
 
-    if (toLocalDateStr(new Date()) === "2026-05-24") {
+    if (todayKey === "2026-05-24") {
       setTodayAffirmation("Joanne is very very very cool. Like super cool.");
       setAffirmationStatus("pending");
       return;
@@ -457,34 +461,20 @@ export default function DashboardPage() {
     if (todayAff) {
       setTodayAffirmation(todayAff.text);
       setAffirmationStatus(todayAff.approved ? "approved" : todayAff.dismissed ? "dismissed" : "pending");
-    } else {
-      // The pool is everything still in circulation: the built-in list plus
-      // anything approved, minus anything dismissed. Approving adds to the
-      // rotation — it must not *become* the rotation, which is what pinned a
-      // single affirmation in place for weeks.
-      const pool = Array.from(new Set([...DEFAULT_AFFIRMATIONS, ...approved.map((a) => a.text)]))
-        .filter((t) => !dismissed.has(t));
-      // If every one has been dismissed, start the defaults over rather than
-      // rendering no card at all.
-      const available = pool.length > 0 ? pool : [...DEFAULT_AFFIRMATIONS];
-
-      if (available.length > 0) {
-        // Pick based on day of year for consistency
-        const dayOfYear = Math.floor(
-          (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000
-        );
-        let pick = available[dayOfYear % available.length];
-        // The pool shrinks and grows as things get approved/dismissed, so the
-        // day-of-year index can land back on the last one shown. Nudge off it.
-        const lastShown = all[0]?.text;
-        if (pick === lastShown && available.length > 1) {
-          pick = available[(dayOfYear + 1) % available.length];
-        }
-        setTodayAffirmation(pick);
-        setAffirmationStatus("pending");
-      }
+      return;
     }
-  }, [supabase]);
+
+    const pick = pickAffirmation(todayKey, user?.id || "", {
+      seen: new Set(all.map((a) => a.text)),
+      approved: approved.map((a) => a.text),
+      dismissed,
+      lastShown: all[0]?.text,
+    });
+    if (pick) {
+      setTodayAffirmation(pick);
+      setAffirmationStatus("pending");
+    }
+  }, [supabase, todayKey, user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -777,16 +767,22 @@ export default function DashboardPage() {
   async function handleAffirmation(approve: boolean) {
     if (!user || !todayAffirmation) return;
 
-    // Check if this affirmation already exists for today (use local date)
+    // Check if this affirmation already exists for today.
+    //
+    // The bounds have to be instants, not bare "YYYY-MM-DD" strings: shown_at
+    // is timestamptz, so Postgres reads a bare date as UTC midnight. For anyone
+    // logging in the evening west of UTC that window sits a day off and never
+    // matched, so every press inserted another row instead of updating today's.
     const now = new Date();
-    const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const localTomorrow = (() => { const t = new Date(now); t.setDate(t.getDate() + 1); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; })();
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
     const { data: existing } = await supabase
       .from("affirmations")
       .select("id")
       .eq("text", todayAffirmation)
-      .gte("shown_at", localToday)
-      .lt("shown_at", localTomorrow);
+      .gte("shown_at", dayStart.toISOString())
+      .lt("shown_at", dayEnd.toISOString());
 
     if (existing && existing.length > 0) {
       await supabase
@@ -1889,6 +1885,7 @@ export default function DashboardPage() {
       {tab === "journal" && (
         <div className="fixed top-24 right-6 w-52 hidden lg:block">{calendarCard}</div>
       )}
+
     </main>
   );
 }
