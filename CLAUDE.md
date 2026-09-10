@@ -9,6 +9,7 @@
 3. Open the PR. Prefer the GitHub API (`mcp__github__create_pull_request`) when it's available; if it fails, fall back to printing the compare URL: `https://github.com/Dbaldauf147/gratitude-journal/pull/new/<branch>`.
 4. **Merge it yourself** (`mcp__github__merge_pull_request`) once the work is verified — the user asked for this rather than being handed a link each time. Report the merge commit instead. Verification doesn't get lighter for being faster: see below for what it means here. If the branch conflicts or the change turns out riskier than it looked, fix that first rather than merging and explaining afterwards. Still stop and ask on anything destructive or genuinely ambiguous.
 5. Don't push directly to `master`. Everything lands through a PR.
+6. **Deploy it.** Merging ships nothing here — the deploy is a separate manual step. See Deploys below.
 
 Branches stay one-PR-per-change so each fix can be reviewed and merged independently — don't pile unrelated changes onto a previous branch.
 
@@ -27,9 +28,23 @@ Supabase is a live shared database, not a fixture. Read freely; before writing, 
 
 ## Deploys
 
-Vercel builds `master` on every merge — this is a Next.js app on Vercel's Git integration, and `next.config.mjs` bakes `VERCEL_URL` into the bundle as `NEXT_PUBLIC_DEPLOY_ID` so an open tab can notice a newer deploy has shipped (that's what the update pill compares against `/api/version`). A merged PR is live within a couple of minutes.
+**Merging does not deploy.** This project has no Vercel Git integration — `vercel inspect` on a
+production deployment shows no branch or commit metadata, and `master` on GitHub sat nine commits
+behind a current production for weeks before anyone noticed. Merge the PR *and then* ship it by
+hand, from the repo root:
 
-What that build does **not** ship:
+    vercel deploy --prod --yes --archive=tgz
+
+`--archive=tgz` is not optional. `public/meditations/` holds ~160 pre-generated MP3s (~270MB), and
+without the flag the CLI uploads them one at a time via `/v2/files` and dies partway with an opaque
+"Internal Server Error". Archive mode sends a single ~70MB tarball instead.
+
+Reporting the merge and stopping there leaves the change unshipped, which is the mistake this note
+exists to prevent. `next.config.mjs` bakes `VERCEL_URL` into the bundle as `NEXT_PUBLIC_DEPLOY_ID`,
+so once the deploy lands an open tab can tell a newer one has shipped — that is what the update pill
+compares against `/api/version`.
+
+What a deploy does **not** ship:
 
 - **The database.** `supabase-schema.sql` is the schema as it should be; applying it — and any migration a change needs — happens in Supabase, by hand. Code that reads a column nobody has added yet deploys perfectly and fails at runtime, so when a change needs schema, say so in the PR and don't merge it ahead of the migration.
 - **Environment variables** — the Supabase URL and keys, and the Anthropic key, live in Vercel → Settings → Environment Variables. A new one is not shipped by merging the code that reads it.
