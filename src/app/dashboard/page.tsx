@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import InstallHint from "../InstallHint";
 import MeditationsTab from "./MeditationsTab";
 import JokesTab from "./JokesTab";
+import SettingsSheet from "./SettingsSheet";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
 import { ownsJokes, seesDailyJoke } from "@/lib/roles";
 import { pickPopularQuote } from "@/lib/popularQuotes";
@@ -368,6 +369,7 @@ export default function DashboardPage() {
   });
 
   const [tab, setTab] = useState<Tab>("journal");
+  const [showSettings, setShowSettings] = useState(false);
 
   // One SFW joke a day, for the accounts that get one. Fetched from the server
   // because the jokes belong to another account and RLS won't hand them over.
@@ -978,6 +980,19 @@ export default function DashboardPage() {
             className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
           >
             Sign out
+          </button>
+          {/* Settings. What lives here is occasional housekeeping — bringing in a
+              journal kept somewhere else — so it sits behind a gear rather than
+              taking a tab of its own. */}
+          <button
+            onClick={() => setShowSettings(true)}
+            aria-label="Settings"
+            className="tap-scale text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+            </svg>
           </button>
         </div>
         </div>
@@ -1886,6 +1901,13 @@ export default function DashboardPage() {
         <div className="fixed top-24 right-6 w-52 hidden lg:block">{calendarCard}</div>
       )}
 
+      {showSettings && user && (
+        <SettingsSheet
+          userId={user.id}
+          onClose={() => setShowSettings(false)}
+          onImported={loadEntries}
+        />
+      )}
     </main>
   );
 }
