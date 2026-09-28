@@ -135,3 +135,8 @@ create policy "Users can update their own affirmations"
   on public.affirmations for update using (auth.uid() = user_id);
 create policy "Users can delete their own affirmations"
   on public.affirmations for delete using (auth.uid() = user_id);
+
+-- Daily photos/videos (private `daily-media` storage bucket, one folder per
+-- user per local day) and dad-joke rulings. Full, re-runnable DDL — bucket,
+-- storage policies, table, grant and policies — is in
+-- scripts/create-daily-media-and-dad-jokes.sql.

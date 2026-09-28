@@ -7,6 +7,10 @@ import InstallHint from "../InstallHint";
 import MeditationsTab from "./MeditationsTab";
 import JokesTab from "./JokesTab";
 import SettingsSheet from "./SettingsSheet";
+import TodayMediaCard from "./TodayMediaCard";
+import DadJokeCard from "./DadJokeCard";
+import MediaGrid from "./MediaGrid";
+import { listDayMedia, dayAgo, type DayMedia } from "@/lib/dailyMedia";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
 import { ownsJokes, seesDailyJoke } from "@/lib/roles";
 import { pickPopularQuote } from "@/lib/popularQuotes";
@@ -374,6 +378,12 @@ export default function DashboardPage() {
   // One SFW joke a day, for the accounts that get one. Fetched from the server
   // because the jokes belong to another account and RLS won't hand them over.
   const [dailyJoke, setDailyJoke] = useState<{ text: string; punchline: string | null } | null>(null);
+  // Whether the curated joke has been looked up for today. The dad-joke card
+  // waits on it, so an account that does get a joke never sees one flash first.
+  const [jokeCheckedFor, setJokeCheckedFor] = useState("");
+
+  // Photos and videos saved a month and a year ago, for "On This Day".
+  const [throwbackMedia, setThrowbackMedia] = useState<{ monthAgo: DayMedia[]; yearAgo: DayMedia[] }>({ monthAgo: [], yearAgo: [] });
 
   // Affirmation state
   const [todayAffirmation, setTodayAffirmation] = useState<string>("");
@@ -583,15 +593,31 @@ export default function DashboardPage() {
   }, [user, loadQuotes]);
 
   useEffect(() => {
-    if (!user || !seesDailyJoke(user.email)) return;
+    if (!user) return;
+    setDailyJoke(null);
+    if (!seesDailyJoke(user.email)) {
+      setJokeCheckedFor(todayKey);
+      return;
+    }
     let live = true;
     // Pass our local day so the joke turns over at the reader's midnight.
     fetch(`/api/joke/today?date=${todayKey}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (live && d?.joke) setDailyJoke(d.joke); })
-      .catch(() => { /* a missing joke is not worth an error in the daily view */ });
+      .catch(() => { /* a missing joke is not worth an error in the daily view */ })
+      .finally(() => { if (live) setJokeCheckedFor(todayKey); });
     return () => { live = false; };
   }, [user, todayKey]);
+
+  useEffect(() => {
+    if (!user) return;
+    let live = true;
+    const safe = (day: string) => listDayMedia(supabase, user.id, day).catch(() => [] as DayMedia[]);
+    Promise.all([safe(dayAgo(todayKey, { months: 1 })), safe(dayAgo(todayKey, { years: 1 }))]).then(
+      ([monthAgo, yearAgo]) => { if (live) setThrowbackMedia({ monthAgo, yearAgo }); }
+    );
+    return () => { live = false; };
+  }, [supabase, user, todayKey]);
 
   async function handleQuote(approve: boolean) {
     if (!user || !quote) return;
@@ -1309,17 +1335,23 @@ export default function DashboardPage() {
           </section>
         )}
 
+        {/* No joke today — offer a dad joke to save or throw away instead. */}
+        {user && !dailyJoke && jokeCheckedFor === todayKey && (
+          <DadJokeCard userId={user.id} todayKey={todayKey} />
+        )}
+
         {/* On this day — a month ago and a year ago, side by side */}
-        {(throwbacks.monthAgo || throwbacks.yearAgo) && (
+        {(throwbacks.monthAgo || throwbacks.yearAgo ||
+          throwbackMedia.monthAgo.length > 0 || throwbackMedia.yearAgo.length > 0) && (
           <section className="bg-[var(--pastel-amber)] rounded-2xl p-6">
             <p className="text-xs text-[var(--text-muted)] tracking-widest uppercase mb-4">
               On This Day
             </p>
             <div className="grid sm:grid-cols-2 gap-6 sm:divide-x divide-[var(--border)]">
               {([
-                { label: "A Month Ago Today", entry: throwbacks.monthAgo },
-                { label: "A Year Ago Today", entry: throwbacks.yearAgo },
-              ] as const).map(({ label, entry }, col) => (
+                { label: "A Month Ago Today", entry: throwbacks.monthAgo, media: throwbackMedia.monthAgo },
+                { label: "A Year Ago Today", entry: throwbacks.yearAgo, media: throwbackMedia.yearAgo },
+              ] as const).map(({ label, entry, media }, col) => (
                 <div key={label} className={col === 1 ? "sm:pl-6" : ""}>
                   <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-1">
                     {label}
@@ -1345,16 +1377,23 @@ export default function DashboardPage() {
                         )}
                       </div>
                     </>
-                  ) : (
+                  ) : !media.length ? (
                     <p className="text-sm text-[var(--text-muted)] italic mt-2">
                       No entry from this day.
                     </p>
+                  ) : null}
+                  {media.length > 0 && (
+                    <div className="mt-3">
+                      <MediaGrid media={media} />
+                    </div>
                   )}
                 </div>
               ))}
             </div>
           </section>
         )}
+
+        {user && <TodayMediaCard userId={user.id} todayKey={todayKey} />}
 
         {/* Today's Entry Form */}
         {!todayEntry ? (
