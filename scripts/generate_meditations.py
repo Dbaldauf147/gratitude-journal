@@ -5,6 +5,7 @@ Output: public/meditations/<id>.mp3
 """
 import asyncio
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,9 +30,26 @@ VOICES = {
         "male": "en-AU-WilliamNeural",
     },
 }
-RATE = "-20%"
-PITCH = "-5Hz"
-VOLUME = "-10%"
+# Neural voices sound most human close to their native prosody. Slowing them hard
+# and dropping the pitch is what made the earlier renders sound synthetic, so the
+# calm pacing now comes from real pauses between sentences instead.
+RATE = "-8%"
+PITCH = "+0Hz"
+VOLUME = "+0%"
+# Breath between sentences inside one spoken segment, like a human guide leaves.
+SENTENCE_PAUSE = 1.1
+SAMPLE_RATE = 24000
+# Final polish on the whole track: cut rumble, soften the harsh TTS top end, add a
+# faint small-room ambience so it doesn't sound like it came straight off a server,
+# then level to a quiet, even loudness.
+MASTER_FILTER = ",".join([
+    "highpass=f=70",
+    "lowpass=f=9000",
+    "equalizer=f=4500:t=q:w=1.2:g=-3",
+    "equalizer=f=180:t=q:w=1:g=1.5",
+    "aecho=0.9:0.6:28|47:0.10|0.06",
+    "loudnorm=I=-20:TP=-2:LRA=9",
+])
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "public" / "meditations"
 
@@ -743,6 +761,11 @@ MEDITATIONS_10 = {
 }
 
 
+def split_sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return [p for p in parts if p]
+
+
 async def generate_speech(text: str, voice: str, out_path: Path) -> None:
     last_err: Exception | None = None
     for attempt in range(5):
@@ -761,29 +784,48 @@ async def generate_speech(text: str, voice: str, out_path: Path) -> None:
     raise RuntimeError(f"Failed after retries: {last_err}")
 
 
-def make_silence(seconds: float, out_path: Path) -> None:
+def to_wav(mp3_path: Path, out_path: Path) -> None:
+    # Trim the dead air edge-tts pads around each clip so our own pauses set the
+    # pacing, and fade the edges so sentence joins don't click.
+    trim = "silenceremove=start_periods=1:start_threshold=-50dB"
     subprocess.run(
         [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"anullsrc=r=24000:cl=mono",
-            "-t", str(seconds),
-            "-q:a", "9", "-acodec", "libmp3lame",
+            "ffmpeg", "-y", "-loglevel", "error", "-i", str(mp3_path),
+            "-af", f"{trim},areverse,{trim},areverse,afade=t=in:d=0.03,areverse,afade=t=in:d=0.08,areverse",
+            "-ar", str(SAMPLE_RATE), "-ac", "1", "-c:a", "pcm_s16le",
             str(out_path),
         ],
         check=True,
     )
 
 
-def concat_mp3s(parts: list[Path], out_path: Path) -> None:
+def make_silence(seconds: float, out_path: Path) -> None:
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"anullsrc=r={SAMPLE_RATE}:cl=mono",
+            "-t", str(seconds),
+            "-c:a", "pcm_s16le",
+            str(out_path),
+        ],
+        check=True,
+    )
+
+
+def master(parts: list[Path], out_path: Path) -> None:
     list_file = out_path.with_suffix(".txt")
     with open(list_file, "w", encoding="utf-8") as f:
         for p in parts:
             f.write(f"file '{p.as_posix()}'\n")
+    # VBR instead of the old 32k CBR: speech gets the bits it needs to sound clear,
+    # and the long silences cost almost nothing, so files stay about the same size.
     subprocess.run(
         [
             "ffmpeg", "-y", "-loglevel", "error",
             "-f", "concat", "-safe", "0", "-i", str(list_file),
-            "-c:a", "libmp3lame", "-b:a", "32k", "-ac", "1",
+            "-af", MASTER_FILTER,
+            "-ar", str(SAMPLE_RATE), "-ac", "1",
+            "-c:a", "libmp3lame", "-q:a", "6",
             str(out_path),
         ],
         check=True,
@@ -797,20 +839,34 @@ async def build_one(med_id: str, segments: list, length: int, accent: str, gende
         print(f"Skipping {out_file.name} (exists)")
         return
     print(f"Starting {out_file.name}...")
+
+    # Expand spoken segments into sentences separated by a short breath.
+    pieces: list = []
+    for seg in segments:
+        if isinstance(seg, str):
+            for j, sentence in enumerate(split_sentences(seg)):
+                if j:
+                    pieces.append(SENTENCE_PAUSE)
+                pieces.append(sentence)
+        else:
+            pieces.append(float(seg))
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        parts: list[Path] = [tmp_path / f"{med_id}_{accent}_{gender}_{length}_{i:03d}.mp3" for i in range(len(segments))]
+        parts: list[Path] = [tmp_path / f"{i:04d}.wav" for i in range(len(pieces))]
 
-        async def make_part(i: int, seg):
+        async def make_part(i: int, piece):
             part = parts[i]
-            if isinstance(seg, str):
+            if isinstance(piece, str):
+                raw = part.with_suffix(".mp3")
                 async with sem:
-                    await generate_speech(seg, voice, part)
+                    await generate_speech(piece, voice, raw)
+                to_wav(raw, part)
             else:
-                make_silence(float(seg), part)
+                make_silence(piece, part)
 
-        await asyncio.gather(*(make_part(i, s) for i, s in enumerate(segments)))
-        concat_mp3s(parts, out_file)
+        await asyncio.gather(*(make_part(i, p) for i, p in enumerate(pieces)))
+        master(parts, out_file)
     print(f"  Wrote {out_file.name}")
 
 
