@@ -8,12 +8,14 @@
 // Attributions are the commonly accepted ones. Quotes that circulate widely
 // but are known to be misattributed are deliberately left out.
 
+import { MORE_QUOTES } from "./moreQuotes";
+
 export interface PopularQuote {
   text: string;
   author: string;
 }
 
-export const POPULAR_QUOTES: PopularQuote[] = [
+const FIRST_BATCH: PopularQuote[] = [
   { text: "The only way to do great work is to love what you do.", author: "Steve Jobs" },
   { text: "Whether you think you can or you think you can't, you're right.", author: "Henry Ford" },
   { text: "In the middle of difficulty lies opportunity.", author: "Albert Einstein" },
@@ -273,6 +275,8 @@ export const POPULAR_QUOTES: PopularQuote[] = [
   { text: "We shall not cease from exploration, and the end of all our exploring will be to arrive where we started and know the place for the first time.", author: "T.S. Eliot" },
 ];
 
+export const POPULAR_QUOTES: PopularQuote[] = [...FIRST_BATCH, ...MORE_QUOTES];
+
 // Stable per-day index so a refresh doesn't reshuffle the card.
 function hashDay(key: string) {
   let h = 0;
@@ -284,12 +288,19 @@ function hashDay(key: string) {
 
 /**
  * The next popular quote to show, skipping anything the user has already
- * kept or removed. Once the whole pool has been seen it starts over, since a
- * repeat beats a blank card.
+ * kept or removed. Once the whole pool has been seen, the ones they kept come
+ * back round — never one they removed, unless they removed every last one,
+ * since a repeat beats a blank card.
  */
-export function pickPopularQuote(dayKey: string, seen: Set<string>, offset = 0): PopularQuote | null {
+export function pickPopularQuote(
+  dayKey: string,
+  seen: Set<string>,
+  kept: Set<string> = new Set(),
+  offset = 0
+): PopularQuote | null {
   const unseen = POPULAR_QUOTES.filter((q) => !seen.has(q.text));
-  const pool = unseen.length > 0 ? unseen : POPULAR_QUOTES;
+  const keptAgain = POPULAR_QUOTES.filter((q) => kept.has(q.text));
+  const pool = unseen.length > 0 ? unseen : keptAgain.length > 0 ? keptAgain : POPULAR_QUOTES;
   if (pool.length === 0) return null;
   return pool[(hashDay(dayKey) + offset) % pool.length];
 }
