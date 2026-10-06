@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import InstallHint from "../InstallHint";
@@ -12,7 +12,7 @@ import DadJokeCard from "./DadJokeCard";
 import MediaGrid from "./MediaGrid";
 import { listDayMedia, dayAgo, type DayMedia } from "@/lib/dailyMedia";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
-import { ownsJokes, seesDailyJoke } from "@/lib/roles";
+import { ownsJokes, seesDailyJoke, skipsQuoteCalendar } from "@/lib/roles";
 import { pickPopularQuote } from "@/lib/popularQuotes";
 import { pickAffirmation } from "@/lib/affirmations";
 
@@ -355,6 +355,13 @@ export default function DashboardPage() {
   // Every quote text this user has already ruled on, kept or removed. Drives
   // the popular-quote fallback so it never re-offers one they've seen.
   const [seenQuotes, setSeenQuotes] = useState<Set<string>>(new Set());
+  // Set while a Keep/Remove is saving. Each press used to await two round
+  // trips before the card changed, so a slow connection invited repeat taps —
+  // one account logged the same removal five times in a row.
+  // The ref is the real guard — state only lands on the next render, which is
+  // too late for taps in quick succession. The state drives `disabled`.
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const quoteBusyRef = useRef(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit1, setEdit1] = useState("");
   const [edit2, setEdit2] = useState("");
@@ -544,8 +551,8 @@ export default function DashboardPage() {
   // Serve the next quote from the standing popular-quote pool. Used whenever
   // the calendar has nothing to offer for today — either it carries no quote
   // for this date, or the user removed the one it does carry.
-  const showPopularQuote = useCallback((seen: Set<string>) => {
-    const pick = pickPopularQuote(todayKey, seen);
+  const showPopularQuote = useCallback((seen: Set<string>, kept: Set<string>) => {
+    const pick = pickPopularQuote(todayKey, seen, kept);
     if (!pick) {
       setQuote(null);
       return;
@@ -561,12 +568,16 @@ export default function DashboardPage() {
       .select("*")
       .order("shown_at", { ascending: false });
     const all: SavedQuote[] = data || [];
-    setApprovedQuotes(all.filter((q) => q.approved && !q.dismissed));
+    const approved = all.filter((q) => q.approved && !q.dismissed);
+    setApprovedQuotes(approved);
+    const kept = new Set(approved.map((q) => q.text));
     const seen = new Set(all.map((q) => q.text));
     setSeenQuotes(seen);
 
     let calendar: { quote: string; author: string } | null = null;
-    try {
+    // Some accounts don't get the calendar at all — their quotes come from the
+    // pool every day. See skipsQuoteCalendar in roles.ts.
+    if (!skipsQuoteCalendar(user.email)) try {
       const res = await fetch("/api/quote/today");
       if (res.ok) {
         const d = await res.json();
@@ -585,7 +596,18 @@ export default function DashboardPage() {
       return;
     }
 
-    showPopularQuote(seen);
+    // A pool quote kept today stays today's quote. Without this a reload moved
+    // straight past it, because keeping it is what marks it as seen.
+    const keptToday = all.find(
+      (q) => q.approved && !q.dismissed && isToday(q.shown_at) && q.text !== calendar?.quote
+    );
+    if (keptToday) {
+      setQuote({ quote: keptToday.text, author: keptToday.author || "" });
+      setQuoteStatus("approved");
+      return;
+    }
+
+    showPopularQuote(seen, kept);
   }, [supabase, user, showPopularQuote]);
 
   useEffect(() => {
@@ -620,6 +642,18 @@ export default function DashboardPage() {
   }, [supabase, user, todayKey]);
 
   async function handleQuote(approve: boolean) {
+    if (!user || !quote || quoteBusyRef.current) return;
+    quoteBusyRef.current = true;
+    setQuoteBusy(true);
+    try {
+      await saveQuoteVerdict(approve);
+    } finally {
+      quoteBusyRef.current = false;
+      setQuoteBusy(false);
+    }
+  }
+
+  async function saveQuoteVerdict(approve: boolean) {
     if (!user || !quote) return;
     const { data: existing } = await supabase
       .from("quotes")
@@ -657,7 +691,9 @@ export default function DashboardPage() {
     } else {
       setApprovedQuotes((prev) => prev.filter((q) => q.text !== quote.quote));
       // Removing one shouldn't cost them the day's quote — hand over the next.
-      showPopularQuote(seen);
+      const kept = new Set(approvedQuotes.map((q) => q.text));
+      kept.delete(quote.quote);
+      showPopularQuote(seen, kept);
     }
   }
 
@@ -1257,13 +1293,15 @@ export default function DashboardPage() {
               <div className="flex gap-2 justify-center mt-3">
                 <button
                   onClick={() => handleQuote(true)}
-                  className="px-4 py-1.5 rounded-full bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors"
+                  disabled={quoteBusy}
+                  className="disabled:opacity-60 px-4 py-1.5 rounded-full bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors"
                 >
                   Keep in Rotation
                 </button>
                 <button
                   onClick={() => handleQuote(false)}
-                  className="px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                  disabled={quoteBusy}
+                  className="disabled:opacity-60 px-4 py-1.5 rounded-full border border-[var(--border)] bg-white text-xs text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
                 >
                   Remove
                 </button>
@@ -1763,7 +1801,7 @@ export default function DashboardPage() {
                           .eq("id", a.id);
                         await loadAffirmations();
                       }}
-                      className="text-xs text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
+                      className="text-xs text-[var(--text-muted)] [@media(hover:hover)]:opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
                       title="Remove from rotation"
                     >
                       remove
@@ -1808,9 +1846,11 @@ export default function DashboardPage() {
                         setApprovedQuotes((prev) => prev.filter((x) => x.id !== q.id));
                         const seen = new Set(seenQuotes).add(q.text);
                         setSeenQuotes(seen);
-                        if (quote && quote.quote === q.text) showPopularQuote(seen);
+                        if (quote && quote.quote === q.text) {
+                          showPopularQuote(seen, new Set(approvedQuotes.filter((x) => x.id !== q.id).map((x) => x.text)));
+                        }
                       }}
-                      className="text-xs text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
+                      className="text-xs text-[var(--text-muted)] [@media(hover:hover)]:opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
                       title="Remove from rotation"
                     >
                       remove
