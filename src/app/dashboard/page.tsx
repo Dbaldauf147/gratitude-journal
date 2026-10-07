@@ -1017,6 +1017,109 @@ export default function DashboardPage() {
       </div>
   );
 
+  // Kept quotes, one per text. The table holds a row per showing, so the same
+  // quote can be kept more than once — the count should be quotes, not rows.
+  const savedQuotes = approvedQuotes.filter(
+    (q, i) => approvedQuotes.findIndex((x) => x.text === q.text) === i
+  );
+
+  // Saved affirmations and quotes. Rendered on the journal page and again in
+  // the gear sheet, so it's built once here rather than written out twice.
+  const savedCollections = (
+    <>
+      {/* Approved Affirmations — always rendered. Hiding the section when it
+          was empty meant there was nothing on the page to tell you where kept
+          affirmations end up, so "none saved" and "feature missing" looked
+          identical. */}
+      <section className="space-y-3">
+        <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
+          Your Affirmations ({approvedAffirmations.length})
+        </h3>
+        <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+          {approvedAffirmations.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)] leading-relaxed">
+              Nothing kept yet. Press <span className="text-[var(--text)]">Keep in Rotation</span> on
+              today&apos;s affirmation and it&apos;ll be here.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {approvedAffirmations.map((a) => (
+                <div key={a.id} className="flex items-start gap-3 group">
+                  <div className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-[var(--pastel-lavender)]" />
+                  <p className="flex-1 text-sm text-[var(--text)] leading-relaxed italic">
+                    {a.text}
+                  </p>
+                  <button
+                    onClick={async () => {
+                      await supabase
+                        .from("affirmations")
+                        .update({ dismissed: true, approved: false })
+                        .eq("id", a.id);
+                      await loadAffirmations();
+                    }}
+                    className="text-xs text-[var(--text-muted)] [@media(hover:hover)]:opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
+                    title="Remove from rotation"
+                  >
+                    remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Approved Quotes — always rendered, same reasoning as above. */}
+      <section className="space-y-3">
+        <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
+          Your Quotes ({savedQuotes.length})
+        </h3>
+        <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
+          {savedQuotes.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)] leading-relaxed">
+              Nothing kept yet. Press <span className="text-[var(--text)]">Keep in Rotation</span> on
+              today&apos;s quote and it&apos;ll be here.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {savedQuotes.map((q) => (
+                <div key={q.id} className="flex items-start gap-3 group">
+                  <div className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-[var(--pastel-rose)]" />
+                  <div className="flex-1">
+                    <p className="text-sm text-[var(--text)] leading-relaxed italic">
+                      {q.text}
+                    </p>
+                    {q.author && (
+                      <p className="text-xs text-[var(--text-muted)] mt-1">— {q.author}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await supabase
+                        .from("quotes")
+                        .update({ dismissed: true, approved: false })
+                        .eq("text", q.text);
+                      setApprovedQuotes((prev) => prev.filter((x) => x.text !== q.text));
+                      const seen = new Set(seenQuotes).add(q.text);
+                      setSeenQuotes(seen);
+                      if (quote && quote.quote === q.text) {
+                        showPopularQuote(seen, new Set(approvedQuotes.filter((x) => x.text !== q.text).map((x) => x.text)));
+                      }
+                    }}
+                    className="text-xs text-[var(--text-muted)] [@media(hover:hover)]:opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
+                    title="Remove from rotation"
+                  >
+                    remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </>
+  );
+
   return (
     <main className="min-h-screen pb-tabbar md:pb-20">
       {/* Header — sticky, so the streak and sign-out stay reachable without
@@ -1771,96 +1874,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Approved Affirmations — always rendered. Hiding the section when it
-            was empty meant there was nothing on the page to tell you where kept
-            affirmations end up, so "none saved" and "feature missing" looked
-            identical. */}
-        <section className="space-y-3">
-          <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
-            Your Affirmations
-          </h3>
-          <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
-            {approvedAffirmations.length === 0 ? (
-              <p className="text-sm text-[var(--text-muted)] leading-relaxed">
-                Nothing kept yet. Press <span className="text-[var(--text)]">Keep in Rotation</span> on
-                today&apos;s affirmation and it&apos;ll be here.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {approvedAffirmations.map((a) => (
-                  <div key={a.id} className="flex items-start gap-3 group">
-                    <div className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-[var(--pastel-lavender)]" />
-                    <p className="flex-1 text-sm text-[var(--text)] leading-relaxed italic">
-                      {a.text}
-                    </p>
-                    <button
-                      onClick={async () => {
-                        await supabase
-                          .from("affirmations")
-                          .update({ dismissed: true, approved: false })
-                          .eq("id", a.id);
-                        await loadAffirmations();
-                      }}
-                      className="text-xs text-[var(--text-muted)] [@media(hover:hover)]:opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
-                      title="Remove from rotation"
-                    >
-                      remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Approved Quotes — always rendered, same reasoning as above. */}
-        <section className="space-y-3">
-          <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
-            Your Quotes
-          </h3>
-          <div className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]">
-            {approvedQuotes.length === 0 ? (
-              <p className="text-sm text-[var(--text-muted)] leading-relaxed">
-                Nothing kept yet. Press <span className="text-[var(--text)]">Keep in Rotation</span> on
-                today&apos;s quote and it&apos;ll be here.
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {approvedQuotes.map((q) => (
-                  <div key={q.id} className="flex items-start gap-3 group">
-                    <div className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-[var(--pastel-rose)]" />
-                    <div className="flex-1">
-                      <p className="text-sm text-[var(--text)] leading-relaxed italic">
-                        {q.text}
-                      </p>
-                      {q.author && (
-                        <p className="text-xs text-[var(--text-muted)] mt-1">— {q.author}</p>
-                      )}
-                    </div>
-                    <button
-                      onClick={async () => {
-                        await supabase
-                          .from("quotes")
-                          .update({ dismissed: true, approved: false })
-                          .eq("id", q.id);
-                        setApprovedQuotes((prev) => prev.filter((x) => x.id !== q.id));
-                        const seen = new Set(seenQuotes).add(q.text);
-                        setSeenQuotes(seen);
-                        if (quote && quote.quote === q.text) {
-                          showPopularQuote(seen, new Set(approvedQuotes.filter((x) => x.id !== q.id).map((x) => x.text)));
-                        }
-                      }}
-                      className="text-xs text-[var(--text-muted)] [@media(hover:hover)]:opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all shrink-0"
-                      title="Remove from rotation"
-                    >
-                      remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
+        {savedCollections}
 
         {/* Month at a glance. The desktop build parks this in a fixed sidebar,
             which is hidden below lg — so on a phone the same card goes inline,
@@ -1985,6 +1999,7 @@ export default function DashboardPage() {
           userId={user.id}
           onClose={() => setShowSettings(false)}
           onImported={loadEntries}
+          saved={savedCollections}
         />
       )}
     </main>
