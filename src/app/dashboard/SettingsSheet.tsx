@@ -58,10 +58,13 @@ export default function SettingsSheet({
   userId,
   onClose,
   onImported,
+  saved,
 }: {
   userId: string;
   onClose: () => void;
   onImported: () => void;
+  /** Saved affirmations and quotes, built by the dashboard so both copies match. */
+  saved?: React.ReactNode;
 }) {
   const supabase = useMemo(() => createClient(), []);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -286,6 +289,8 @@ export default function SettingsSheet({
         </div>
 
         <div className="px-6 py-6 space-y-6">
+          {saved}
+
           <section className="space-y-4">
             <div>
               <h3 className="text-base text-[var(--text)]">Import past entries</h3>
