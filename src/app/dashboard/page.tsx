@@ -1023,14 +1023,12 @@ export default function DashboardPage() {
     (q, i) => approvedQuotes.findIndex((x) => x.text === q.text) === i
   );
 
-  // Saved affirmations and quotes. Rendered on the journal page and again in
-  // the gear sheet, so it's built once here rather than written out twice.
+  // Saved affirmations and quotes, shown in the gear (Settings) sheet. Built
+  // here because the state and the remove handlers live on this page.
   const savedCollections = (
     <>
-      {/* Approved Affirmations — always rendered. Hiding the section when it
-          was empty meant there was nothing on the page to tell you where kept
-          affirmations end up, so "none saved" and "feature missing" looked
-          identical. */}
+      {/* Approved Affirmations — always rendered, even when empty, so "none
+          saved" can't be mistaken for "feature missing". */}
       <section className="space-y-3">
         <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
           Your Affirmations ({approvedAffirmations.length})
@@ -1873,8 +1871,6 @@ export default function DashboardPage() {
             Saved
           </div>
         )}
-
-        {savedCollections}
 
         {/* Month at a glance. The desktop build parks this in a fixed sidebar,
             which is hidden below lg — so on a phone the same card goes inline,
