@@ -10,6 +10,7 @@ import {
   type ParsedRow,
   type ParseResult,
 } from "@/lib/importEntries";
+import { buildWorkbook, XLSX_MIME, type ExportEntry } from "@/lib/exportEntries";
 
 /** How an imported day that already has an entry is handled. */
 type OnDuplicate = "skip" | "replace";
@@ -86,6 +87,8 @@ export default function SettingsSheet({
   const [existing, setExisting] = useState<Map<string, string> | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [summary, setSummary] = useState<string>("");
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState("");
 
   // Esc closes, and the page behind shouldn't scroll while this is open.
   useEffect(() => {
@@ -194,6 +197,50 @@ export default function SettingsSheet({
     return tally;
   }, [states]);
 
+  /** Every entry, as an .xlsx download. */
+  async function runExport() {
+    if (exporting) return;
+    setExporting(true);
+    setExportNote("");
+    const entries: ExportEntry[] = [];
+    // Supabase caps a request at 1000 rows; a long-running journal is more.
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase
+        .from("gratitude_entries")
+        .select("created_at, grateful_1, grateful_2, grateful_3")
+        .order("created_at", { ascending: true })
+        .range(from, from + 999);
+      if (error) {
+        setExportNote(`Couldn't read your journal — ${error.message}`);
+        setExporting(false);
+        return;
+      }
+      entries.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    if (!entries.length) {
+      setExportNote("There are no entries to export yet.");
+      setExporting(false);
+      return;
+    }
+
+    const blob = new Blob([buildWorkbook(entries) as unknown as BlobPart], { type: XLSX_MIME });
+    const url = URL.createObjectURL(blob);
+    const today = new Date();
+    const stamp = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `gratitude-journal-${stamp}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoked late: some browsers start reading the blob after click() returns.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+
+    setExportNote(`Exported ${entries.length} ${entries.length === 1 ? "day" : "days"}.`);
+    setExporting(false);
+  }
+
   async function runImport() {
     if (!willWrite.length || progress) return;
     setNote("");
@@ -290,6 +337,26 @@ export default function SettingsSheet({
 
         <div className="px-6 py-6 space-y-6">
           {saved}
+
+          <section className="space-y-3">
+            <div>
+              <h3 className="text-base text-[var(--text)]">Export to Excel</h3>
+              <p className="text-sm text-[var(--text-muted)] mt-1 leading-relaxed">
+                Download every entry as a spreadsheet — one row per day, oldest first, with the
+                date and your three gratitudes.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={runExport}
+                disabled={exporting}
+                className="text-sm px-5 py-2 rounded-full bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {exporting ? "Preparing..." : "Download .xlsx"}
+              </button>
+              {exportNote && <span className="text-xs text-[var(--text-muted)]">{exportNote}</span>}
+            </div>
+          </section>
 
           <section className="space-y-4">
             <div>
