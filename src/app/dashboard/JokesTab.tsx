@@ -61,6 +61,13 @@ export default function JokesTab({ userId }: { userId: string }) {
   const [note, setNote] = useState("");
   // Set when an export holds several calendars and one has to be chosen.
   const [choices, setChoices] = useState<{ label: string; text: string }[] | null>(null);
+  // The "Add a joke" form. Rating is optional: left unset, the joke joins the
+  // review queue like an imported one.
+  const [draftText, setDraftText] = useState("");
+  const [draftPunchline, setDraftPunchline] = useState("");
+  const [draftRating, setDraftRating] = useState<Rating | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [addNote, setAddNote] = useState("");
 
   const load = useCallback(async () => {
     const { data, error } = await supabase
@@ -120,6 +127,42 @@ export default function JokesTab({ userId }: { userId: string }) {
       setJokes((prev) => [...prev, gone]);
       setNote("Couldn't delete that one.");
     }
+  }
+
+  async function addJoke() {
+    const text = draftText.trim();
+    if (!text || adding) return;
+    // Same text-based dedupe the import uses for events without a UID.
+    if (jokes.some((j) => dedupeKey({ text: j.text }) === dedupeKey({ text }))) {
+      setAddNote("That one's already in your jokes.");
+      return;
+    }
+    setAdding(true);
+    setAddNote("");
+    const { data, error } = await supabase
+      .from("jokes")
+      .insert({
+        user_id: userId,
+        text,
+        punchline: draftPunchline.trim() || null,
+        rating: draftRating,
+      })
+      .select()
+      .single();
+    if (error) {
+      setAddNote(
+        isMissingTable(error)
+          ? "The jokes table isn't in Supabase yet. Run the jokes block from supabase-schema.sql in the SQL Editor, then try again."
+          : `Couldn't add that joke: ${error.message}`
+      );
+    } else {
+      setJokes((prev) => [...prev, data as Joke]);
+      setDraftText("");
+      setDraftPunchline("");
+      setDraftRating(null);
+      setAddNote(draftRating ? "Added." : "Added to the review queue.");
+    }
+    setAdding(false);
   }
 
   /** Import one calendar's worth of text. Throws so the caller can report why. */
@@ -302,7 +345,7 @@ export default function JokesTab({ userId }: { userId: string }) {
           <p className="text-sm text-[var(--text-muted)]">
             {jokes.length
               ? "Every joke is rated. Import more below, or browse what you have."
-              : "No jokes yet — import your calendar below and they'll queue up here."}
+              : "No jokes yet. Add one below, or import your calendar and they'll queue up here."}
           </p>
         )}
       </section>
@@ -386,6 +429,63 @@ export default function JokesTab({ userId }: { userId: string }) {
           )}
         </section>
       )}
+
+      {/* Add one by hand */}
+      <section className="bg-[var(--surface)] rounded-2xl p-6 border border-[var(--border)]">
+        <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
+          Add a Joke
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            addJoke();
+          }}
+          className="space-y-3"
+        >
+          <textarea
+            value={draftText}
+            onChange={(e) => setDraftText(e.target.value)}
+            placeholder="The joke (or the setup)"
+            rows={2}
+            className="w-full rounded-xl bg-[var(--bg)] border border-[var(--border)] px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] resize-y"
+          />
+          <textarea
+            value={draftPunchline}
+            onChange={(e) => setDraftPunchline(e.target.value)}
+            placeholder="Punchline (optional)"
+            rows={1}
+            className="w-full rounded-xl bg-[var(--bg)] border border-[var(--border)] px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] resize-y"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            {(["sfw", "nsfw"] as Rating[]).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setDraftRating((cur) => (cur === r ? null : r))}
+                aria-pressed={draftRating === r}
+                className={`px-3.5 py-1.5 rounded-full text-xs transition-colors ${
+                  draftRating === r
+                    ? `${r === "sfw" ? "bg-[var(--pastel-sage)]" : "bg-[var(--pastel-rose)]"} text-[var(--text)]`
+                    : "border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)]"
+                }`}
+              >
+                {r.toUpperCase()}
+              </button>
+            ))}
+            <span className="text-[11px] text-[var(--text-muted)]">
+              {draftRating ? "" : "Leave both off to rate it later"}
+            </span>
+            <button
+              type="submit"
+              disabled={!draftText.trim() || adding}
+              className="ml-auto px-6 py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-50 disabled:hover:bg-[var(--accent)]"
+            >
+              {adding ? "Adding…" : "Add joke"}
+            </button>
+          </div>
+        </form>
+        {addNote && <p className="mt-4 text-[13px] text-[var(--text)]">{addNote}</p>}
+      </section>
 
       {/* Import */}
       <section className="bg-[var(--surface)] rounded-2xl p-6 border border-[var(--border)]">
