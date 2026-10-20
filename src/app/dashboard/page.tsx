@@ -10,7 +10,8 @@ import SettingsSheet from "./SettingsSheet";
 import TodayMediaCard from "./TodayMediaCard";
 import DadJokeCard from "./DadJokeCard";
 import MediaGrid from "./MediaGrid";
-import { listDayMedia, dayAgo, type DayMedia } from "@/lib/dailyMedia";
+import EntryMedia from "./EntryMedia";
+import { listDayMedia, moveDayMedia, dayAgo, type DayMedia } from "@/lib/dailyMedia";
 import { getWordOfTheDay, type KoreanWord } from "@/lib/koreanWords";
 import { ownsJokes, seesDailyJoke, skipsQuoteCalendar } from "@/lib/roles";
 import { pickPopularQuote } from "@/lib/popularQuotes";
@@ -815,6 +816,15 @@ export default function DashboardPage() {
         ...(dateChanged && entry ? { created_at: withLocalDate(entry.created_at, editDate) } : {}),
       })
       .eq("id", entryId);
+
+    if (!error && dateChanged && user) {
+      // The day's photos are filed by date, so they follow the entry.
+      try {
+        await moveDayMedia(supabase, user.id, originalDate, editDate);
+      } catch (e) {
+        alert("Entry saved, but its photos couldn't be moved: " + ((e as { message?: string })?.message || e));
+      }
+    }
 
     if (!error) {
       setEditingId(null);
@@ -1975,6 +1985,15 @@ export default function DashboardPage() {
                       )
                     )}
                   </div>
+                )}
+                {/* Photos upload as soon as they're picked — they're files,
+                    not part of the text Save/Cancel governs. */}
+                {user && (
+                  <EntryMedia
+                    userId={user.id}
+                    day={toLocalDateStr(new Date(entry.created_at))}
+                    editing={editingId === entry.id}
+                  />
                 )}
               </div>
             ))}

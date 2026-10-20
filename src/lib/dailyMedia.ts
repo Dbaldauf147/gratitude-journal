@@ -80,3 +80,27 @@ export function dayAgo(todayKey: string, { months = 0, years = 0 }) {
   date.setFullYear(date.getFullYear() - years, date.getMonth() - months);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
+
+/**
+ * Re-files a day's media under another day, for when an entry's date is
+ * corrected. Copy-then-remove rather than `move`: the bucket has no UPDATE
+ * policy, and select + insert + delete are what it does grant.
+ */
+export async function moveDayMedia(
+  supabase: SupabaseClient,
+  userId: string,
+  fromDay: string,
+  toDay: string
+) {
+  const from = `${userId}/${fromDay}`;
+  const { data, error } = await supabase.storage.from(MEDIA_BUCKET).list(from);
+  if (error) throw error;
+  const names = (data || []).filter((f) => f.id && !f.name.startsWith(".")).map((f) => f.name);
+  for (const name of names) {
+    const { error: copyError } = await supabase.storage
+      .from(MEDIA_BUCKET)
+      .copy(`${from}/${name}`, `${userId}/${toDay}/${name}`);
+    if (copyError) throw copyError;
+    await deleteDayMedia(supabase, `${from}/${name}`);
+  }
+}
