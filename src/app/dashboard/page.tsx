@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import InstallHint from "../InstallHint";
@@ -142,6 +142,40 @@ function toLocalDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// Day keys are local YYYY-MM-DD strings. Parsed by parts, because
+// new Date("YYYY-MM-DD") reads as UTC midnight — the previous day for anyone
+// west of Greenwich.
+function parseDayKey(key: string) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function shiftDayKey(key: string, days: number) {
+  const d = parseDayKey(key);
+  d.setDate(d.getDate() + days);
+  return toLocalDateStr(d);
+}
+
+function formatDayKey(key: string) {
+  return parseDayKey(key).toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+// "Yesterday", "3 days ago", "2 weeks ago" — the line above the day's date.
+function relativeDayLabel(key: string, todayKey: string) {
+  const days = Math.round((parseDayKey(todayKey).getTime() - parseDayKey(key).getTime()) / 86400000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 14) return `${days} days ago`;
+  if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
+  if (days < 730) return `${Math.floor(days / 30)} months ago`;
+  return `${Math.floor(days / 365)} years ago`;
+}
+
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   return d.toLocaleDateString("en-US", {
@@ -174,7 +208,6 @@ export default function DashboardPage() {
   const [saved, setSaved] = useState(false);
   const [todayEntry, setTodayEntry] = useState<GratitudeEntry | null>(null);
   const [throwbacks, setThrowbacks] = useState<{ monthAgo: GratitudeEntry | null; yearAgo: GratitudeEntry | null }>({ monthAgo: null, yearAgo: null });
-  const [koreanWord] = useState(() => getWordOfTheDay());
   const [meaningRevealed, setMeaningRevealed] = useState(false);
   const [learnedWords, setLearnedWords] = useState<KoreanWord[]>([]);
 
@@ -214,6 +247,18 @@ export default function DashboardPage() {
       window.removeEventListener("focus", check);
     };
   }, []);
+
+  // The day the journal is showing. Starts on today and follows it across
+  // midnight, unless the reader has stepped back to another day.
+  const [viewDay, setViewDay] = useState(todayKey);
+  const viewingToday = viewDay === todayKey;
+  const prevTodayKey = useRef(todayKey);
+  useEffect(() => {
+    setViewDay((v) => (v === prevTodayKey.current ? todayKey : v));
+    prevTodayKey.current = todayKey;
+  }, [todayKey]);
+
+  const koreanWord = useMemo(() => getWordOfTheDay(parseDayKey(viewDay)), [viewDay]);
 
   async function submitPhrase(e: React.FormEvent) {
     e.preventDefault();
@@ -353,6 +398,8 @@ export default function DashboardPage() {
   const [quote, setQuote] = useState<{ quote: string; author: string } | null>(null);
   const [quoteStatus, setQuoteStatus] = useState<"pending" | "approved" | "dismissed">("pending");
   const [approvedQuotes, setApprovedQuotes] = useState<SavedQuote[]>([]);
+  // Every quote row, newest first — what a past day's view looks back through.
+  const [quoteLog, setQuoteLog] = useState<SavedQuote[]>([]);
   // Every quote text this user has already ruled on, kept or removed. Drives
   // the popular-quote fallback so it never re-offers one they've seen.
   const [seenQuotes, setSeenQuotes] = useState<Set<string>>(new Set());
@@ -369,12 +416,10 @@ export default function DashboardPage() {
   const [edit3, setEdit3] = useState("");
   const [editDate, setEditDate] = useState("");
   const [editSaving, setEditSaving] = useState(false);
-  const [pastDate, setPastDate] = useState("");
   const [past1, setPast1] = useState("");
   const [past2, setPast2] = useState("");
   const [past3, setPast3] = useState("");
   const [pastSaving, setPastSaving] = useState(false);
-  const [showPastEntry, setShowPastEntry] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -397,6 +442,7 @@ export default function DashboardPage() {
   const [todayAffirmation, setTodayAffirmation] = useState<string>("");
   const [affirmationStatus, setAffirmationStatus] = useState<"pending" | "approved" | "dismissed">("pending");
   const [approvedAffirmations, setApprovedAffirmations] = useState<Affirmation[]>([]);
+  const [affirmationLog, setAffirmationLog] = useState<Affirmation[]>([]);
 
   const loadEntries = useCallback(async () => {
     const { data } = await supabase
@@ -409,42 +455,25 @@ export default function DashboardPage() {
       setEntries(data);
       const todayE = data.find((e) => isToday(e.created_at));
       setTodayEntry(todayE || null);
-
-      // "On this day" throwback. The 100-entry window above may not reach back
-      // far enough, so check the loaded set first and fall back to a query.
-      const findForDate = async (date: Date): Promise<GratitudeEntry | null> => {
-        const str = toLocalDateStr(date);
-        const inData = data.find((e) => toLocalDateStr(new Date(e.created_at)) === str);
-        if (inData) return inData;
-        const dayStart = new Date(date);
-        dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(date);
-        dayEnd.setHours(23, 59, 59, 999);
-        const { data: d } = await supabase
-          .from("gratitude_entries")
-          .select("*")
-          .gte("created_at", dayStart.toISOString())
-          .lte("created_at", dayEnd.toISOString())
-          .limit(1);
-        return d?.[0] || null;
-      };
-
-      // Show a month ago today and a year ago today side by side.
-      const monthAgo = new Date();
-      monthAgo.setMonth(monthAgo.getMonth() - 1);
-      const yearAgo = new Date();
-      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
-
-      const [monthAgoEntry, yearAgoEntry] = await Promise.all([
-        findForDate(monthAgo),
-        findForDate(yearAgo),
-      ]);
-      setThrowbacks({ monthAgo: monthAgoEntry, yearAgo: yearAgoEntry });
     }
-    // todayKey isn't read here, but isToday() and the throwback offsets all
-    // resolve against the local day, so this has to re-run when it rolls over.
+    // todayKey isn't read here, but isToday() resolves against the local day,
+    // so this has to re-run when it rolls over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, todayKey]);
+
+  // One local day's entry, straight from the database — for days older than
+  // the 100 entries loaded above.
+  const fetchEntryForDay = useCallback(async (day: string): Promise<GratitudeEntry | null> => {
+    const dayStart = parseDayKey(day);
+    const dayEnd = parseDayKey(shiftDayKey(day, 1));
+    const { data } = await supabase
+      .from("gratitude_entries")
+      .select("*")
+      .gte("created_at", dayStart.toISOString())
+      .lt("created_at", dayEnd.toISOString())
+      .limit(1);
+    return data?.[0] || null;
+  }, [supabase]);
 
   const loadAffirmations = useCallback(async () => {
     // Load all user's affirmations
@@ -454,6 +483,7 @@ export default function DashboardPage() {
       .order("shown_at", { ascending: false });
 
     const all: Affirmation[] = data || [];
+    setAffirmationLog(all);
 
     // Rows are one-per-day, so the same text piles up with conflicting
     // verdicts. Only the newest row for a text counts — otherwise a months-old
@@ -569,6 +599,7 @@ export default function DashboardPage() {
       .select("*")
       .order("shown_at", { ascending: false });
     const all: SavedQuote[] = data || [];
+    setQuoteLog(all);
     const approved = all.filter((q) => q.approved && !q.dismissed);
     setApprovedQuotes(approved);
     const kept = new Set(approved.map((q) => q.text));
@@ -619,28 +650,144 @@ export default function DashboardPage() {
     if (!user) return;
     setDailyJoke(null);
     if (!seesDailyJoke(user.email)) {
-      setJokeCheckedFor(todayKey);
+      setJokeCheckedFor(viewDay);
       return;
     }
     let live = true;
-    // Pass our local day so the joke turns over at the reader's midnight.
-    fetch(`/api/joke/today?date=${todayKey}`)
+    // Pass the local day being viewed: the joke turns over at the reader's
+    // midnight, and a past day shows the joke it had.
+    fetch(`/api/joke/today?date=${viewDay}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (live && d?.joke) setDailyJoke(d.joke); })
       .catch(() => { /* a missing joke is not worth an error in the daily view */ })
-      .finally(() => { if (live) setJokeCheckedFor(todayKey); });
+      .finally(() => { if (live) setJokeCheckedFor(viewDay); });
     return () => { live = false; };
-  }, [user, todayKey]);
+  }, [user, viewDay]);
+
+  // "On this day" — a month and a year before the day being viewed. The
+  // loaded entries may not reach back far enough, so a miss falls back to a
+  // query.
+  useEffect(() => {
+    if (!user) return;
+    let live = true;
+    const find = (day: string) => {
+      const hit = entries.find((e) => toLocalDateStr(new Date(e.created_at)) === day);
+      return hit ? Promise.resolve(hit) : fetchEntryForDay(day).catch(() => null);
+    };
+    Promise.all([find(dayAgo(viewDay, { months: 1 })), find(dayAgo(viewDay, { years: 1 }))]).then(
+      ([monthAgo, yearAgo]) => { if (live) setThrowbacks({ monthAgo, yearAgo }); }
+    );
+    return () => { live = false; };
+  }, [user, entries, viewDay, fetchEntryForDay]);
 
   useEffect(() => {
     if (!user) return;
     let live = true;
+    setThrowbackMedia({ monthAgo: [], yearAgo: [] });
     const safe = (day: string) => listDayMedia(supabase, user.id, day).catch(() => [] as DayMedia[]);
-    Promise.all([safe(dayAgo(todayKey, { months: 1 })), safe(dayAgo(todayKey, { years: 1 }))]).then(
+    Promise.all([safe(dayAgo(viewDay, { months: 1 })), safe(dayAgo(viewDay, { years: 1 }))]).then(
       ([monthAgo, yearAgo]) => { if (live) setThrowbackMedia({ monthAgo, yearAgo }); }
     );
     return () => { live = false; };
-  }, [supabase, user, todayKey]);
+  }, [supabase, user, viewDay]);
+
+  // The viewed day's entry. Usually already loaded; older days are fetched.
+  // `undefined` means still looking, `null` means there isn't one.
+  const loadedDayEntry = entries.find((e) => toLocalDateStr(new Date(e.created_at)) === viewDay);
+  const [fetchedDay, setFetchedDay] = useState<{ day: string; entry: GratitudeEntry | null } | null>(null);
+  useEffect(() => {
+    if (!user || entries.some((e) => toLocalDateStr(new Date(e.created_at)) === viewDay)) return;
+    let live = true;
+    fetchEntryForDay(viewDay)
+      .catch(() => null)
+      .then((entry) => { if (live) setFetchedDay({ day: viewDay, entry }); });
+    return () => { live = false; };
+  }, [user, entries, viewDay, fetchEntryForDay]);
+  const dayEntry: GratitudeEntry | null | undefined =
+    loadedDayEntry ?? (fetchedDay?.day === viewDay ? fetchedDay.entry : undefined);
+
+  // Moving to another day drops any half-finished edit or past-entry draft,
+  // and brings the calendar round to that day's month.
+  useEffect(() => {
+    setEditingId(null);
+    setEditDate("");
+    setPast1("");
+    setPast2("");
+    setPast3("");
+    const d = parseDayKey(viewDay);
+    setCalendarMonth({ year: d.getFullYear(), month: d.getMonth() });
+  }, [viewDay]);
+
+  // A past day's quote: the one ruled on that day if there was one, otherwise
+  // what the quote calendar carried for that date.
+  const [calendarQuoteFor, setCalendarQuoteFor] = useState<{ day: string; quote: string; author: string } | null>(null);
+  useEffect(() => {
+    if (!user || viewingToday || skipsQuoteCalendar(user.email)) return;
+    let live = true;
+    fetch(`/api/quote/today?date=${viewDay}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d?.quote) setCalendarQuoteFor({ day: viewDay, quote: d.quote, author: d.author || "" }); })
+      .catch(() => { /* no quote is just a quieter day */ });
+    return () => { live = false; };
+  }, [user, viewDay, viewingToday]);
+
+  const dayQuote = useMemo(() => {
+    if (viewingToday) return null;
+    const ruled = quoteLog.find((q) => toLocalDateStr(new Date(q.shown_at)) === viewDay);
+    if (ruled && !ruled.dismissed) {
+      return { text: ruled.text, author: ruled.author || "", status: ruled.approved ? "approved" : "pending" };
+    }
+    if (calendarQuoteFor?.day === viewDay) {
+      const row = quoteLog.find((q) => q.text === calendarQuoteFor.quote);
+      if (row?.dismissed) return null;
+      return { text: calendarQuoteFor.quote, author: calendarQuoteFor.author, status: row?.approved ? "approved" : "pending" };
+    }
+    return null;
+  }, [viewingToday, viewDay, quoteLog, calendarQuoteFor]);
+
+  const dayAffirmation = viewingToday
+    ? null
+    : affirmationLog.find((a) => toLocalDateStr(new Date(a.shown_at)) === viewDay) || null;
+
+  const goToDay = useCallback((day: string) => {
+    if (day > todayKey) return;
+    setViewDay(day);
+  }, [todayKey]);
+
+  // Left/right arrow keys step through days, unless someone is typing.
+  useEffect(() => {
+    if (tab !== "journal") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (e.key === "ArrowLeft") goToDay(shiftDayKey(viewDay, -1));
+      else if (e.key === "ArrowRight") goToDay(shiftDayKey(viewDay, 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tab, viewDay, goToDay]);
+
+  // Swipe left/right on a phone to change day. Only a clearly sideways swipe
+  // counts, so scrolling the page never flips the day by accident.
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  function onDayTouchStart(e: React.TouchEvent) {
+    const t = e.target as HTMLElement;
+    if (t.closest("input, textarea, video, [data-no-swipe]")) {
+      swipeStart.current = null;
+      return;
+    }
+    swipeStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+  function onDayTouchEnd(e: React.TouchEvent) {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start) return;
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return;
+    goToDay(shiftDayKey(viewDay, dx < 0 ? 1 : -1));
+  }
 
   async function handleQuote(approve: boolean) {
     if (!user || !quote || quoteBusyRef.current) return;
@@ -725,34 +872,31 @@ export default function DashboardPage() {
 
   async function handlePastSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!past1.trim() || !past2.trim() || !past3.trim() || !pastDate) return;
+    if (!past1.trim() || !past2.trim() || !past3.trim() || viewingToday) return;
 
-    // Check if entry already exists for this date (compare in local time)
-    const existing = entries.find((en) => {
-      const d = new Date(en.created_at);
-      const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      return localDate === pastDate;
-    });
-    if (existing) {
-      alert("An entry already exists for this date. Edit it below instead.");
+    // One entry per day.
+    if (dayEntry) {
+      alert("An entry already exists for this date. Edit it instead.");
       return;
     }
 
+    const day = viewDay;
     setPastSaving(true);
-    const { error } = await supabase.from("gratitude_entries").insert({
+    const { data, error } = await supabase.from("gratitude_entries").insert({
       user_id: user?.id,
       grateful_1: past1.trim(),
       grateful_2: past2.trim(),
       grateful_3: past3.trim(),
-      created_at: `${pastDate}T21:00:00.000Z`,
+      // Local noon, so the entry lands on this day in the reader's own zone.
+      created_at: new Date(parseDayKey(day).setHours(12)).toISOString(),
     }).select();
 
     if (!error) {
       setPast1("");
       setPast2("");
       setPast3("");
-      setPastDate("");
-      setShowPastEntry(false);
+      // Older than the loaded window, the reload below won't carry it.
+      if (data?.[0]) setFetchedDay({ day, entry: data[0] });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       await loadEntries();
@@ -793,7 +937,7 @@ export default function DashboardPage() {
   async function saveEdit(entryId: string) {
     if (!edit1.trim() || !edit2.trim() || !edit3.trim()) return;
 
-    const entry = entries.find((en) => en.id === entryId);
+    const entry = entries.find((en) => en.id === entryId) ?? (dayEntry?.id === entryId ? dayEntry : undefined);
     const originalDate = entry ? toLocalDateStr(new Date(entry.created_at)) : "";
     const dateChanged = Boolean(entry && editDate && editDate !== originalDate);
 
@@ -829,9 +973,12 @@ export default function DashboardPage() {
     if (!error) {
       setEditingId(null);
       setEditDate("");
+      setFetchedDay(null);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       await loadEntries();
+      // The day view follows an entry that was moved to another date.
+      if (dateChanged) setViewDay(editDate);
     } else {
       alert("Error saving: " + error.message);
     }
@@ -971,8 +1118,7 @@ export default function DashboardPage() {
           {(() => {
             const firstDay = new Date(calendarMonth.year, calendarMonth.month, 1).getDay();
             const daysInMonth = new Date(calendarMonth.year, calendarMonth.month + 1, 0).getDate();
-            const today = new Date();
-            const todayStr2 = toLocalDateStr(today);
+            const todayStr2 = todayKey;
             const entryDateSet = new Set(entries.map(e => toLocalDateStr(new Date(e.created_at))));
             const cells = [];
             for (let i = 0; i < firstDay; i++) cells.push(<div key={`blank-${i}`} />);
@@ -980,30 +1126,27 @@ export default function DashboardPage() {
               const dateStr = `${calendarMonth.year}-${String(calendarMonth.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const hasEntry = entryDateSet.has(dateStr);
               const isDayToday = dateStr === todayStr2;
-              const isFuture = new Date(dateStr) > today;
-              const entry = hasEntry ? entries.find(e => toLocalDateStr(new Date(e.created_at)) === dateStr) : null;
+              const isFuture = dateStr > todayStr2;
+              const isSelected = dateStr === viewDay;
               cells.push(
                 <button
                   key={day}
                   disabled={isFuture}
+                  aria-label={formatDayKey(dateStr)}
+                  aria-current={isSelected ? "date" : undefined}
                   onClick={() => {
-                    if (entry) {
-                      startEditing(entry);
-                      const el = document.getElementById(`entry-${entry.id}`);
-                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    } else if (!isFuture) {
-                      setPastDate(dateStr);
-                      setShowPastEntry(true);
-                      setPast1(''); setPast2(''); setPast3('');
-                      setTimeout(() => {
-                        const el = document.getElementById('past-entry-form');
-                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }, 100);
+                    goToDay(dateStr);
+                    // On a phone the calendar sits below the day, so bring the
+                    // day back into view.
+                    if (window.matchMedia("(max-width: 1023px)").matches) {
+                      window.scrollTo({ top: 0, behavior: "smooth" });
                     }
                   }}
                   className={`relative w-full aspect-square rounded-lg lg:rounded flex items-center justify-center transition-all ${
+                    isSelected ? 'ring-2 ring-[var(--accent)] ' : ''
+                  }${
                     isFuture ? 'text-[var(--text-muted)] opacity-25 cursor-default text-[13px] lg:text-[9px]' :
-                    isDayToday ? 'font-bold ring-1.5 ring-[var(--accent)] text-[var(--accent)] text-[14px] lg:text-[10px]' :
+                    isDayToday ? 'font-bold text-[var(--accent)] text-[14px] lg:text-[10px]' :
                     hasEntry ? 'cursor-pointer hover:opacity-80 text-[14px] lg:text-[10px]' :
                     'cursor-pointer hover:bg-[var(--bg)] text-[var(--text-muted)] text-[13px] lg:text-[9px]'
                   }`}
@@ -1021,7 +1164,10 @@ export default function DashboardPage() {
             <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: 'var(--pastel-sage)' }} /> Logged
           </span>
           <span className="flex items-center gap-1 text-[10px] lg:text-[8px] text-[var(--text-muted)]">
-            <span className="w-2 h-2 rounded-sm ring-1 ring-[var(--accent)]" /> Today
+            <span className="font-bold text-[var(--accent)]">Today</span>
+          </span>
+          <span className="flex items-center gap-1 text-[10px] lg:text-[8px] text-[var(--text-muted)]">
+            <span className="w-2 h-2 rounded-sm ring-1 ring-[var(--accent)]" /> Showing
           </span>
         </div>
       </div>
@@ -1383,6 +1529,50 @@ export default function DashboardPage() {
 
         {tab === "journal" && <>
 
+        {/* The day being shown. Everything down to the calendar belongs to
+            it: arrows, a sideways swipe or the arrow keys step a day at a
+            time, and the calendar below jumps anywhere. */}
+        <div
+          className="space-y-10"
+          onTouchStart={onDayTouchStart}
+          onTouchEnd={onDayTouchEnd}
+        >
+
+        <section className="flex items-center justify-between gap-3" aria-label="Day">
+          <button
+            onClick={() => goToDay(shiftDayKey(viewDay, -1))}
+            aria-label="Previous day"
+            className="tap-scale w-11 h-11 shrink-0 rounded-full bg-[var(--surface)] border border-[var(--border)] shadow-sm flex items-center justify-center text-xl text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+          >
+            ‹
+          </button>
+          <div className="text-center min-w-0">
+            <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase">
+              {relativeDayLabel(viewDay, todayKey)}
+            </p>
+            <h2 className="text-lg font-light text-[var(--text)] leading-snug" aria-live="polite">
+              {formatDayKey(viewDay)}
+            </h2>
+            {!viewingToday && (
+              <button
+                onClick={() => goToDay(todayKey)}
+                className="text-xs text-[var(--accent)] hover:underline mt-0.5"
+              >
+                Back to today
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => goToDay(shiftDayKey(viewDay, 1))}
+            disabled={viewingToday}
+            aria-label="Next day"
+            className="tap-scale w-11 h-11 shrink-0 rounded-full bg-[var(--surface)] border border-[var(--border)] shadow-sm flex items-center justify-center text-xl text-[var(--text-muted)] hover:text-[var(--text)] transition-colors disabled:opacity-30 disabled:cursor-default"
+          >
+            ›
+          </button>
+        </section>
+
+        {viewingToday ? <>
         {/* Today's Quote + Affirmation, side by side */}
         <div className="grid sm:grid-cols-2 gap-4">
 
@@ -1465,13 +1655,52 @@ export default function DashboardPage() {
         )}
 
         </div>
+        </> : (dayQuote || dayAffirmation) && (
+          // A past day shows what it was shown, read-only — the verdicts were
+          // made on the day and live in Settings now.
+          <div className="grid sm:grid-cols-2 gap-4">
+            {dayQuote && (
+              <section className="bg-[var(--pastel-rose)] rounded-2xl p-4 text-center">
+                <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
+                  Quote of the Day
+                </p>
+                <p className="text-sm font-light text-[var(--text)] leading-relaxed italic">
+                  &ldquo;{dayQuote.text}&rdquo;
+                </p>
+                {dayQuote.author && (
+                  <p className="text-[10px] text-[var(--text-muted)] mt-2">— {dayQuote.author}</p>
+                )}
+                {dayQuote.status === "approved" && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-medium bg-[var(--pastel-sage)] text-[var(--text)] mt-3">
+                    ✓ In your rotation
+                  </div>
+                )}
+              </section>
+            )}
+            {dayAffirmation && (
+              <section className="bg-[var(--pastel-lavender)] rounded-2xl p-4 text-center">
+                <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
+                  Affirmation of the Day
+                </p>
+                <p className="text-sm font-light text-[var(--text)] leading-relaxed italic">
+                  &ldquo;{dayAffirmation.text}&rdquo;
+                </p>
+                {dayAffirmation.approved && !dayAffirmation.dismissed && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-medium bg-[var(--pastel-sage)] text-[var(--text)] mt-3">
+                    ✓ In your rotation
+                  </div>
+                )}
+              </section>
+            )}
+          </div>
+        )}
 
         {/* Today's Joke — only ever one that's been rated SFW, and only for the
             accounts set up to receive one. */}
         {dailyJoke && (
           <section className="bg-[var(--pastel-sky)] rounded-2xl p-5 text-center">
             <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-2">
-              Today&apos;s Joke
+              {viewingToday ? "Today's Joke" : "Joke of the Day"}
             </p>
             <p className="text-sm font-light text-[var(--text)] leading-relaxed whitespace-pre-wrap">
               {dailyJoke.text}
@@ -1485,7 +1714,7 @@ export default function DashboardPage() {
         )}
 
         {/* No joke today — offer a dad joke to save or throw away instead. */}
-        {user && !dailyJoke && jokeCheckedFor === todayKey && (
+        {user && viewingToday && !dailyJoke && jokeCheckedFor === todayKey && (
           <DadJokeCard userId={user.id} todayKey={todayKey} />
         )}
 
@@ -1497,10 +1726,10 @@ export default function DashboardPage() {
               On This Day
             </p>
             <div className="grid sm:grid-cols-2 gap-6 sm:divide-x divide-[var(--border)]">
-              {([
-                { label: "A Month Ago Today", entry: throwbacks.monthAgo, media: throwbackMedia.monthAgo },
-                { label: "A Year Ago Today", entry: throwbacks.yearAgo, media: throwbackMedia.yearAgo },
-              ] as const).map(({ label, entry, media }, col) => (
+              {[
+                { label: viewingToday ? "A Month Ago Today" : "A Month Before", entry: throwbacks.monthAgo, media: throwbackMedia.monthAgo },
+                { label: viewingToday ? "A Year Ago Today" : "A Year Before", entry: throwbacks.yearAgo, media: throwbackMedia.yearAgo },
+              ].map(({ label, entry, media }, col) => (
                 <div key={label} className={col === 1 ? "sm:pl-6" : ""}>
                   <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-1">
                     {label}
@@ -1542,10 +1771,120 @@ export default function DashboardPage() {
           </section>
         )}
 
-        {user && <TodayMediaCard userId={user.id} todayKey={todayKey} />}
+        {user && viewingToday && <TodayMediaCard userId={user.id} todayKey={todayKey} />}
 
-        {/* Today's Entry Form */}
-        {!todayEntry ? (
+        {/* The day's entry: read it or edit it if there is one; otherwise the
+            form — tonight's for today, a catch-up one for a past day. */}
+        {dayEntry ? (
+          <section
+            id={`entry-${dayEntry.id}`}
+            className="bg-[var(--surface)] rounded-2xl p-6 sm:p-8 shadow-sm border border-[var(--border)]"
+          >
+            <div className="flex items-center justify-between gap-4 mb-5">
+              <h2 className="text-lg font-light text-[var(--text)]">
+                {viewingToday ? "Today's Reflection" : "Reflection"}
+              </h2>
+              <div className="flex items-center gap-3 shrink-0">
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] bg-[var(--pastel-rose)] px-3 py-1 rounded-full">
+                  3/3 logged
+                </span>
+                {editingId !== dayEntry.id && (
+                  <button
+                    onClick={() => startEditing(dayEntry)}
+                    className="text-xs text-[var(--accent)] hover:underline"
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+            </div>
+
+                {editingId === dayEntry.id ? (
+                  <div className="space-y-3">
+                    <div>
+                      <span className="text-xs text-[var(--text-muted)] block mb-1">Date</span>
+                      <input
+                        type="date"
+                        value={editDate}
+                        onChange={(e) => setEditDate(e.target.value)}
+                        max={toLocalDateStr(new Date())}
+                        className="px-4 py-2.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors w-full"
+                      />
+                      {editDate &&
+                        editDate !== toLocalDateStr(new Date(dayEntry.created_at)) &&
+                        entryDates.has(editDate) && (
+                          <p className="text-xs text-red-400 mt-1">An entry already exists for this date.</p>
+                        )}
+                    </div>
+                    {[
+                      { value: edit1, setter: setEdit1, idx: 0 },
+                      { value: edit2, setter: setEdit2, idx: 1 },
+                      { value: edit3, setter: setEdit3, idx: 2 },
+                    ].map(({ value, setter, idx }) => (
+                      <div key={idx} className="flex items-start gap-3">
+                        <div
+                          className="w-2 h-2 rounded-full mt-3.5 shrink-0"
+                          style={{ backgroundColor: PASTEL_COLORS[idx] }}
+                        />
+                        <textarea
+                          value={value}
+                          onChange={(e) => setter(e.target.value)}
+                          rows={2}
+                          className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
+                        />
+                      </div>
+                    ))}
+                    <div className="flex gap-3 pt-2">
+                      <button
+                        onClick={() => saveEdit(dayEntry.id)}
+                        disabled={
+                          editSaving ||
+                          !editDate ||
+                          (editDate !== toLocalDateStr(new Date(dayEntry.created_at)) &&
+                            entryDates.has(editDate))
+                        }
+                        className="flex-1 py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                      >
+                        {editSaving ? "Saving..." : "Save Changes"}
+                      </button>
+                      <button
+                        onClick={cancelEditing}
+                        className="px-6 py-2.5 rounded-full border border-[var(--border)] text-sm text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {[dayEntry.grateful_1, dayEntry.grateful_2, dayEntry.grateful_3].map(
+                      (text, i) => (
+                        <div key={i} className="flex items-start gap-3">
+                          <div
+                            className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                            style={{ backgroundColor: PASTEL_COLORS[i] }}
+                          />
+                          <p className="text-sm text-[var(--text)] leading-relaxed">
+                            {text}
+                          </p>
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
+            {/* Photos upload as soon as they're picked — they're files, not
+                part of the text Save/Cancel governs. Today's have their own
+                card above. */}
+            {user && !viewingToday && (
+              <EntryMedia
+                key={viewDay}
+                userId={user.id}
+                day={viewDay}
+                editing={editingId === dayEntry.id}
+              />
+            )}
+          </section>
+        ) : viewingToday ? (
           <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -1597,24 +1936,49 @@ export default function DashboardPage() {
               </div>
             </form>
           </section>
-        ) : (
+        ) : dayEntry === undefined ? (
           <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)] text-center">
-            <div className="text-3xl mb-3">&#10024;</div>
-            <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] bg-[var(--pastel-rose)] px-3 py-1 rounded-full mb-3">
-              3/3 logged
-            </span>
+            <p className="text-xs text-[var(--text-muted)]">Loading this day…</p>
+          </section>
+        ) : (
+          <section className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
             <h2 className="text-lg font-light text-[var(--text)] mb-1">
-              Today&apos;s reflection is complete
+              Nothing logged this day
             </h2>
-            <p className="text-xs text-[var(--text-muted)] mb-4">
-              Come back tomorrow evening to continue your practice.
+            <p className="text-xs text-[var(--text-muted)] mb-6">
+              Fill it in — what were three things you were grateful for?
             </p>
-            <button
-              onClick={() => startEditing(todayEntry)}
-              className="text-xs text-[var(--accent)] hover:underline"
-            >
-              Edit today&apos;s entry
-            </button>
+            <form onSubmit={handlePastSubmit} className="space-y-4">
+              {[
+                { value: past1, setter: setPast1, idx: 0 },
+                { value: past2, setter: setPast2, idx: 1 },
+                { value: past3, setter: setPast3, idx: 2 },
+              ].map(({ value, setter, idx }) => (
+                <div key={idx} className="flex items-start gap-3">
+                  <div
+                    className="w-2 h-2 rounded-full mt-3.5 shrink-0"
+                    style={{ backgroundColor: PASTEL_COLORS[idx] }}
+                  />
+                  <textarea
+                    value={value}
+                    onChange={(e) => setter(e.target.value)}
+                    placeholder={PLACEHOLDERS[idx]}
+                    required
+                    rows={2}
+                    className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
+                  />
+                </div>
+              ))}
+
+              <button
+                type="submit"
+                disabled={pastSaving}
+                className="w-full py-3 rounded-full bg-[var(--accent)] text-white text-sm font-medium tracking-wide hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+              >
+                {pastSaving ? "Saving..." : "Save This Day's Gratitude"}
+              </button>
+            </form>
+            {user && <EntryMedia key={viewDay} userId={user.id} day={viewDay} editing />}
           </section>
         )}
 
@@ -1647,7 +2011,7 @@ export default function DashboardPage() {
                 <span className="text-[var(--text-muted)]">Say it: </span>{koreanWord.sound}
               </p>
               <div className="flex items-center gap-3 mt-2">
-                {meaningRevealed ? (
+                {meaningRevealed || !viewingToday ? (
                   <>
                     <p className="text-sm text-[var(--text)]">{koreanWord.meaning}</p>
                     <button
@@ -1673,7 +2037,9 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Type a phrase → Claude translates + breaks it down */}
+          {/* Type a phrase → Claude translates + breaks it down. A tool, not
+              part of the day's record, so it lives on today only. */}
+          {viewingToday && (
           <div className="mt-5 pt-5 border-t border-white/40">
             <p className="text-[10px] text-[var(--text-muted)] tracking-widest uppercase mb-3">
               Translate a Phrase
@@ -1807,74 +2173,10 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+          )}
         </section>
 
-        {/* Past Entry */}
-        <div className="text-center">
-          <button
-            onClick={() => setShowPastEntry((p) => !p)}
-            className="text-xs text-[var(--accent)] hover:underline"
-          >
-            {showPastEntry ? "Hide" : "Add a past entry"}
-          </button>
         </div>
-
-        {showPastEntry && (
-          <section id="past-entry-form" className="bg-[var(--surface)] rounded-2xl p-8 shadow-sm border border-[var(--border)]">
-            <h2 className="text-lg font-light text-[var(--text)] mb-1">
-              Past Reflection
-            </h2>
-            <p className="text-xs text-[var(--text-muted)] mb-4">
-              Fill in a journal entry for a previous day.
-            </p>
-            <form onSubmit={handlePastSubmit} className="space-y-4">
-              <div>
-                <span className="text-xs text-[var(--text-muted)] block mb-1">Date</span>
-                <input
-                  type="date"
-                  value={pastDate}
-                  onChange={(e) => setPastDate(e.target.value)}
-                  max={new Date(Date.now() - 86400000).toISOString().split("T")[0]}
-                  min={new Date(Date.now() - 100 * 86400000).toISOString().split("T")[0]}
-                  required
-                  className="px-4 py-2.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors w-full"
-                />
-                {pastDate && entryDates.has(pastDate) && (
-                  <p className="text-xs text-red-400 mt-1">An entry already exists for this date.</p>
-                )}
-              </div>
-
-              {[
-                { value: past1, setter: setPast1, idx: 0 },
-                { value: past2, setter: setPast2, idx: 1 },
-                { value: past3, setter: setPast3, idx: 2 },
-              ].map(({ value, setter, idx }) => (
-                <div key={idx} className="flex items-start gap-3">
-                  <div
-                    className="w-2 h-2 rounded-full mt-3.5 shrink-0"
-                    style={{ backgroundColor: PASTEL_COLORS[idx] }}
-                  />
-                  <textarea
-                    value={value}
-                    onChange={(e) => setter(e.target.value)}
-                    placeholder={PLACEHOLDERS[idx]}
-                    required
-                    rows={2}
-                    className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
-                  />
-                </div>
-              ))}
-
-              <button
-                type="submit"
-                disabled={pastSaving || !pastDate || entryDates.has(pastDate)}
-                className="w-full py-3 rounded-full bg-[var(--accent)] text-white text-sm font-medium tracking-wide hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
-              >
-                {pastSaving ? "Saving..." : "Save Past Entry"}
-              </button>
-            </form>
-          </section>
-        )}
 
         {saved && (
           <div className="fixed right-6 bottom-[calc(var(--tabbar-height)+var(--safe-bottom)+1rem)] md:bottom-6 bg-[var(--pastel-sage)] text-[var(--text)] text-sm px-5 py-2.5 rounded-full shadow-md">
@@ -1882,123 +2184,10 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Month at a glance. The desktop build parks this in a fixed sidebar,
-            which is hidden below lg — so on a phone the same card goes inline,
-            right above the history it indexes into. */}
+        {/* Month at a glance, below the day on every day. The desktop build
+            parks it in a fixed sidebar, which is hidden below lg — so on a
+            phone the same card goes inline here. */}
         <div className="lg:hidden">{calendarCard}</div>
-
-        {/* Past Entries */}
-        {entries.length > 0 && (
-          <section className="space-y-4">
-            <h3 className="text-xs text-[var(--text-muted)] tracking-widest uppercase">
-              Past Reflections
-            </h3>
-            {entries.map((entry) => (
-              <div
-                key={entry.id}
-                id={`entry-${entry.id}`}
-                className="bg-[var(--surface)] rounded-2xl p-6 shadow-sm border border-[var(--border)]"
-              >
-                <div className="flex items-center justify-between mb-4">
-                  <p className="text-xs text-[var(--text-muted)]">
-                    {formatDate(entry.created_at)}
-                  </p>
-                  {editingId !== entry.id && (
-                    <button
-                      onClick={() => startEditing(entry)}
-                      className="text-xs text-[var(--accent)] hover:underline"
-                    >
-                      Edit
-                    </button>
-                  )}
-                </div>
-
-                {editingId === entry.id ? (
-                  <div className="space-y-3">
-                    <div>
-                      <span className="text-xs text-[var(--text-muted)] block mb-1">Date</span>
-                      <input
-                        type="date"
-                        value={editDate}
-                        onChange={(e) => setEditDate(e.target.value)}
-                        max={toLocalDateStr(new Date())}
-                        className="px-4 py-2.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors w-full"
-                      />
-                      {editDate &&
-                        editDate !== toLocalDateStr(new Date(entry.created_at)) &&
-                        entryDates.has(editDate) && (
-                          <p className="text-xs text-red-400 mt-1">An entry already exists for this date.</p>
-                        )}
-                    </div>
-                    {[
-                      { value: edit1, setter: setEdit1, idx: 0 },
-                      { value: edit2, setter: setEdit2, idx: 1 },
-                      { value: edit3, setter: setEdit3, idx: 2 },
-                    ].map(({ value, setter, idx }) => (
-                      <div key={idx} className="flex items-start gap-3">
-                        <div
-                          className="w-2 h-2 rounded-full mt-3.5 shrink-0"
-                          style={{ backgroundColor: PASTEL_COLORS[idx] }}
-                        />
-                        <textarea
-                          value={value}
-                          onChange={(e) => setter(e.target.value)}
-                          rows={2}
-                          className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors resize-none leading-relaxed"
-                        />
-                      </div>
-                    ))}
-                    <div className="flex gap-3 pt-2">
-                      <button
-                        onClick={() => saveEdit(entry.id)}
-                        disabled={
-                          editSaving ||
-                          !editDate ||
-                          (editDate !== toLocalDateStr(new Date(entry.created_at)) &&
-                            entryDates.has(editDate))
-                        }
-                        className="flex-1 py-2.5 rounded-full bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
-                      >
-                        {editSaving ? "Saving..." : "Save Changes"}
-                      </button>
-                      <button
-                        onClick={cancelEditing}
-                        className="px-6 py-2.5 rounded-full border border-[var(--border)] text-sm text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {[entry.grateful_1, entry.grateful_2, entry.grateful_3].map(
-                      (text, i) => (
-                        <div key={i} className="flex items-start gap-3">
-                          <div
-                            className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                            style={{ backgroundColor: PASTEL_COLORS[i] }}
-                          />
-                          <p className="text-sm text-[var(--text)] leading-relaxed">
-                            {text}
-                          </p>
-                        </div>
-                      )
-                    )}
-                  </div>
-                )}
-                {/* Photos upload as soon as they're picked — they're files,
-                    not part of the text Save/Cancel governs. */}
-                {user && (
-                  <EntryMedia
-                    userId={user.id}
-                    day={toLocalDateStr(new Date(entry.created_at))}
-                    editing={editingId === entry.id}
-                  />
-                )}
-              </div>
-            ))}
-          </section>
-        )}
 
         </>}
       </div>
